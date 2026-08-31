@@ -1,0 +1,675 @@
+<script>
+/**
+ * JsClient.html
+ * Lógica de cliente. Todo el estado vive en el objeto `st` (en memoria del
+ * navegador, se pierde al recargar — el respaldo real vive en Sheets).
+ *
+ * La app tiene dos vistas principales:
+ *  - "comercial": Pasos 1 a 5 (Información comercial → Resumen del diagnóstico).
+ *  - "consultoria": selector de cliente (alimentado por lo cargado en la vista
+ *    "comercial") + Pasos 6 a 9 (Generar consultoría → Entregable) para el
+ *    cliente elegido.
+ * Un tercer contenedor ("historial") se superpone a ambas.
+ */
+
+const PASOS_COMERCIAL = [1,2,3,4,5];
+const NOMBRES_PASO_COMERCIAL = {1:'Comercial',2:'Módulos',3:'Diagnóstico',4:'Preguntas',5:'Resumen'};
+const PASOS_CONSULTORIA = [6,7,8,9];
+const NOMBRES_PASO_CONSULTORIA = {6:'Consultoría',7:'Revisión',8:'Aprobación',9:'Entregable'};
+
+let ultimaVistaPrincipal = null; // 'comercial' | 'consultoria' — desde dónde se llegó a "historial", para el botón "← Volver"
+let listaClientesCache = []; // clientes de apiGetClientesConResumen, para filtrar el buscador sin volver a pedirlos al servidor
+
+let st = {
+  cliente: {},
+  clienteId: null,
+  modulos: [],
+  colaModulos: [],
+  indiceModuloActual: 0,
+  arbolPorModulo: {},
+  respuestasPorModulo: {},
+  historialPreguntas: {}, // {modulo: [preguntaId mostrada en orden]}
+  diagnosticosPorModulo: [], // {modulo, diagnosticoId, diagnosticoJson}
+  consultorias: [], // registros de CONSULTORIAS con contenido_json
+  moduloRevisionActivo: null
+};
+
+document.addEventListener('DOMContentLoaded', function () {
+  renderNavComercial(1);
+  llamarServidor('apiGetModulos').then(function (modulos) {
+    st.modulos = modulos;
+    renderModulosCard();
+  }).catch(mostrarErrorFatal);
+});
+
+// Cierra el dropdown de sugerencias del buscador de clientes si se hace clic afuera.
+document.addEventListener('click', function (e) {
+  const wrap = document.getElementById('buscadorClienteWrap');
+  const sugerencias = document.getElementById('sugerenciasClientes');
+  if (wrap && sugerencias && !wrap.contains(e.target)) sugerencias.classList.add('hidden');
+});
+
+// --------------------------- Infraestructura de llamadas ---------------------------
+
+function llamarServidor(nombreFuncion) {
+  const args = Array.prototype.slice.call(arguments, 1);
+  mostrarCarga(true);
+  return new Promise(function (resolve, reject) {
+    google.script.run
+      .withSuccessHandler(function (respuesta) {
+        mostrarCarga(false);
+        if (respuesta && respuesta.success === false) {
+          mostrarToast(respuesta.mensaje || 'Ocurrió un error.', 'error');
+          reject(respuesta);
+        } else {
+          resolve(respuesta ? respuesta.data : undefined);
+        }
+      })
+      .withFailureHandler(function (error) {
+        mostrarCarga(false);
+        mostrarToast('Error de comunicación con el servidor: ' + error.message, 'error');
+        reject(error);
+      })
+      [nombreFuncion].apply(null, args);
+  });
+}
+
+function mostrarCarga(visible) { document.getElementById('overlayCarga').classList.toggle('hidden', !visible); }
+
+function mostrarToast(mensaje, tipo) {
+  const t = document.getElementById('toast');
+  t.textContent = mensaje;
+  t.className = 'toast' + (tipo ? ' ' + tipo : '');
+  t.classList.remove('hidden');
+  clearTimeout(t._timeout);
+  t._timeout = setTimeout(function () { t.classList.add('hidden'); }, 5000);
+}
+
+function mostrarErrorFatal(e) {
+  console.error(e);
+  mostrarToast('No se pudo cargar la información inicial. Recarga la página.', 'error');
+}
+
+/**
+ * Handler de .catch() para TODAS las llamadas al servidor. Cualquier error,
+ * esperado o no, se ve en pantalla y en la consola (F12) para poder
+ * diagnosticarlo — nunca se traga en silencio.
+ */
+function manejarErrorInesperado_(e) {
+  if (e && typeof e === 'object' && e.success === false) {
+    console.error('Error de servidor (ya mostrado al usuario):', e);
+    return;
+  }
+  console.error('Error inesperado en la interfaz:', e);
+  mostrarToast('Ocurrió un error inesperado en la interfaz: ' + (e && e.message ? e.message : e) + ' (más detalle en la consola, F12).', 'error');
+}
+
+// ------------------------------- Vistas principales --------------------------------
+
+function mostrarVista(nombre) {
+  nombre = nombre || 'landing'; // pantalla de inicio: encabezado + las dos tarjetas grandes, nada de formulario
+  ['landing', 'comercial', 'consultoria', 'historial'].forEach(function (v) {
+    document.getElementById('vista-' + v).classList.toggle('hidden', v !== nombre);
+  });
+  if (nombre === 'comercial' || nombre === 'consultoria') ultimaVistaPrincipal = nombre;
+  document.getElementById('tabBtn-comercial').classList.toggle('activo', nombre === 'comercial');
+  document.getElementById('tabBtn-consultoria').classList.toggle('activo', nombre === 'consultoria');
+
+  if (nombre === 'consultoria' && !st.clienteId) refrescarListaClientes();
+  if (nombre === 'historial') cargarHistorial();
+}
+
+// -------------------------------- Navegación de pasos -----------------------------------
+
+function renderNavComercial(pasoActivo) {
+  document.getElementById('wizardNavComercial').innerHTML = PASOS_COMERCIAL.map(function (p) {
+    let clase = 'paso';
+    if (p === pasoActivo) clase += ' activo'; else if (p < pasoActivo) clase += ' completado';
+    return '<span class="' + clase + '">' + p + '. ' + NOMBRES_PASO_COMERCIAL[p] + '</span>';
+  }).join('');
+}
+
+function renderNavConsultoria(pasoActivo) {
+  document.getElementById('wizardNavConsultoria').innerHTML = PASOS_CONSULTORIA.map(function (p, i) {
+    let clase = 'paso';
+    if (p === pasoActivo) clase += ' activo'; else if (p < pasoActivo) clase += ' completado';
+    return '<span class="' + clase + '">' + (i + 1) + '. ' + NOMBRES_PASO_CONSULTORIA[p] + '</span>';
+  }).join('');
+}
+
+function irAPaso(n) {
+  document.querySelectorAll('.step').forEach(function (s) { s.classList.add('hidden'); });
+  document.getElementById('step-' + n).classList.remove('hidden');
+  if (n <= 5) renderNavComercial(n); else renderNavConsultoria(n);
+  if (n === 5) renderResumenDiagnostico();
+  if (n === 7) renderRevisionConsultoria();
+  if (n === 8) renderAprobacion();
+  if (n === 9) renderEntregable();
+}
+
+function cargarHistorial() {
+  llamarServidor('apiGetHistorial').then(function (filas) {
+    document.getElementById('filasHistorial').innerHTML = filas.map(function (f) {
+      return '<tr><td>' + formatearFecha(f.fecha) + '</td><td>' + f.cliente + '</td><td>' + f.modulo +
+        '</td><td>v' + f.version + '</td><td>' + f.estado + '</td></tr>';
+    }).join('') || '<tr><td colspan="5">Sin registros aún.</td></tr>';
+  }).catch(manejarErrorInesperado_);
+}
+
+function formatearFecha(f) { try { return new Date(f).toLocaleString('es-CO'); } catch (e) { return f; } }
+
+// ------------------------------ Paso 1: Comercial -------------------------------
+
+function irAPaso2() {
+  const campos = ['nombre','pais','industria','categoria','colaboradores','tamano'];
+  const faltan = campos.filter(function (c) { return !document.getElementById('f_' + c).value; });
+  if (faltan.length) { mostrarToast('Completa los campos obligatorios (*) antes de continuar.', 'error'); return; }
+
+  st.cliente = {
+    nombre: val('f_nombre'), pais: val('f_pais'), url: val('f_url'), industria: val('f_industria'),
+    categoria: val('f_categoria'), colaboradores: Number(val('f_colaboradores')), tamano: val('f_tamano'),
+    contextoComercial: val('f_contexto'), objetivos: val('f_objetivos'),
+    doloresIniciales: val('f_dolores'), infoAdicional: val('f_info'),
+    modulosContratados: st.cliente.modulosContratados || []
+  };
+  irAPaso(2);
+}
+
+function val(id) { return document.getElementById(id).value.trim(); }
+
+// ------------------------------ Paso 2: Módulos ---------------------------------
+
+function renderModulosCard() {
+  const cont = document.getElementById('listaModulos');
+  cont.innerHTML = st.modulos.map(function (m) {
+    return '<div class="modulo-card" id="card_' + m.id + '" onclick="toggleModulo(\'' + m.modulo + '\',\'' + m.id + '\')">' +
+      '<input type="checkbox" id="chk_' + m.id + '" onclick="event.stopPropagation(); toggleModulo(\'' + m.modulo + '\',\'' + m.id + '\')">' +
+      '<div><div class="titulo">' + m.modulo + '</div><div class="desc">' + (m.descripcion || '') + '</div></div></div>';
+  }).join('') || '<p class="alerta-error">No hay módulos activos configurados en la hoja MODULOS.</p>';
+}
+
+function toggleModulo(nombreModulo, id) {
+  if (!st.cliente.modulosContratados) st.cliente.modulosContratados = [];
+  const idx = st.cliente.modulosContratados.indexOf(nombreModulo);
+  if (idx === -1) st.cliente.modulosContratados.push(nombreModulo);
+  else st.cliente.modulosContratados.splice(idx, 1);
+
+  document.getElementById('card_' + id).classList.toggle('seleccionado', idx === -1);
+  document.getElementById('chk_' + id).checked = idx === -1;
+}
+
+function avanzarModulos() {
+  if (!st.cliente.modulosContratados || st.cliente.modulosContratados.length === 0) {
+    mostrarToast('Selecciona al menos un módulo contratado.', 'error');
+    return;
+  }
+  irAPaso(3);
+}
+
+// -------------------------- Paso 3: Diagnóstico general --------------------------
+
+function guardarClienteYContinuar() {
+  st.cliente.procesosActuales = val('f_procesos');
+  st.cliente.herramientasUtilizadas = val('f_herramientas');
+  st.cliente.nivelAutomatizacion = val('f_automatizacion');
+
+  llamarServidor('apiGuardarCliente', st.cliente).then(function (registro) {
+    if (!registro || !registro.id) {
+      throw new Error('El servidor no devolvió el cliente guardado correctamente (respuesta: ' + JSON.stringify(registro) + ').');
+    }
+    st.clienteId = registro.id;
+    st.colaModulos = st.cliente.modulosContratados.slice();
+    st.indiceModuloActual = 0;
+    irAPaso(4);
+    iniciarDiagnosticoModuloActual();
+  }).catch(manejarErrorInesperado_);
+}
+
+// -------------------------- Paso 4: Preguntas condicionales -----------------------
+
+function iniciarDiagnosticoModuloActual() {
+  if (st.indiceModuloActual >= st.colaModulos.length) { irAPaso(5); return; }
+  const modulo = st.colaModulos[st.indiceModuloActual];
+  document.getElementById('moduloEnCurso').textContent =
+    'Módulo ' + (st.indiceModuloActual + 1) + ' de ' + st.colaModulos.length + ': ' + modulo;
+
+  if (st.arbolPorModulo[modulo]) { renderPreguntaActual(modulo); return; }
+
+  llamarServidor('apiGetArbolPreguntas', modulo).then(function (arbol) {
+    st.arbolPorModulo[modulo] = arbol;
+    st.respuestasPorModulo[modulo] = {};
+    st.historialPreguntas[modulo] = [];
+    if (!arbol || arbol.length === 0) {
+      mostrarToast('El módulo "' + modulo + '" aún no tiene preguntas configuradas en la Base de Conocimiento. Se omite del diagnóstico.', 'error');
+      pasarSiguienteModulo();
+      return;
+    }
+    renderPreguntaActual(modulo);
+  }).catch(manejarErrorInesperado_);
+}
+
+function esVisible_(pregunta, respuestas) {
+  if (!pregunta.preguntaPadreId) return true;
+  const respuestaPadre = respuestas[pregunta.preguntaPadreId];
+  if (respuestaPadre === undefined) return false;
+  const valores = Array.isArray(respuestaPadre) ? respuestaPadre : [respuestaPadre];
+  return valores.indexOf(pregunta.valorPadreDispara) !== -1;
+}
+
+function siguientePreguntaPendiente_(modulo) {
+  const arbol = st.arbolPorModulo[modulo];
+  const respuestas = st.respuestasPorModulo[modulo];
+  return arbol.find(function (p) { return esVisible_(p, respuestas) && respuestas[p.id] === undefined; }) || null;
+}
+
+function renderPreguntaActual(modulo) {
+  const pregunta = siguientePreguntaPendiente_(modulo);
+  const cont = document.getElementById('preguntaActual');
+
+  const arbol = st.arbolPorModulo[modulo];
+  const visibles = arbol.filter(function (p) { return esVisible_(p, st.respuestasPorModulo[modulo]); });
+  const respondidas = visibles.filter(function (p) { return st.respuestasPorModulo[modulo][p.id] !== undefined; });
+  const progreso = visibles.length ? Math.round(100 * respondidas.length / visibles.length) : 0;
+
+  if (!pregunta) {
+    // Terminó este módulo: calcular diagnóstico estructurado y pasar al siguiente
+    llamarServidor('apiProcesarDiagnostico', st.clienteId, modulo, st.respuestasPorModulo[modulo])
+      .then(function (registro) {
+        st.diagnosticosPorModulo.push({ modulo: modulo, diagnosticoId: registro.id, diagnosticoJson: registro.diagnostico_json });
+        pasarSiguienteModulo();
+      }).catch(manejarErrorInesperado_);
+    return;
+  }
+
+  st.historialPreguntas[modulo].push(pregunta.id);
+
+  let html = '<div class="barra-progreso"><div class="barra-progreso-fill" style="width:' + progreso + '%"></div></div>';
+  html += '<div class="texto-pregunta">' + escapar(pregunta.pregunta) + '</div>';
+  if (pregunta.ayuda) html += '<div class="ayuda">' + escapar(pregunta.ayuda) + '</div>';
+
+  if (pregunta.tipo === 'checkbox') {
+    html += '<div class="opciones-pregunta" id="opcionesCheckbox">' + pregunta.opciones.map(function (o) {
+      return '<label class="opcion-btn"><input type="checkbox" value="' + escapar(o.valor) + '" style="width:auto;margin-right:8px;">' + escapar(o.valor) + '</label>';
+    }).join('') + '</div><button class="btn-primary" onclick="responderCheckbox(\'' + modulo + '\',\'' + pregunta.id + '\')">Continuar</button>';
+  } else if (pregunta.tipo === 'texto') {
+    html += '<textarea id="respuestaTexto" rows="3"></textarea>' +
+      '<button class="btn-primary" style="margin-top:10px" onclick="responderTexto(\'' + modulo + '\',\'' + pregunta.id + '\')">Continuar</button>';
+  } else {
+    // radio / select -> avanza automáticamente al elegir
+    html += '<div class="opciones-pregunta">' + pregunta.opciones.map(function (o) {
+      return '<button class="opcion-btn" onclick="responder(\'' + modulo + '\',\'' + pregunta.id + '\',\'' + escapar(o.valor).replace(/'/g, "\\'") + '\')">' + escapar(o.valor) + '</button>';
+    }).join('') + '</div>';
+  }
+  cont.innerHTML = html;
+}
+
+function responder(modulo, preguntaId, valor) {
+  st.respuestasPorModulo[modulo][preguntaId] = valor;
+  renderPreguntaActual(modulo);
+}
+function responderCheckbox(modulo, preguntaId) {
+  const seleccionadas = Array.prototype.slice.call(document.querySelectorAll('#opcionesCheckbox input:checked')).map(function (c) { return c.value; });
+  if (seleccionadas.length === 0) { mostrarToast('Selecciona al menos una opción.', 'error'); return; }
+  st.respuestasPorModulo[modulo][preguntaId] = seleccionadas;
+  renderPreguntaActual(modulo);
+}
+function responderTexto(modulo, preguntaId) {
+  const texto = document.getElementById('respuestaTexto').value.trim();
+  if (!texto) { mostrarToast('Escribe una respuesta antes de continuar.', 'error'); return; }
+  st.respuestasPorModulo[modulo][preguntaId] = texto;
+  renderPreguntaActual(modulo);
+}
+
+function volverPreguntaAnterior() {
+  const modulo = st.colaModulos[st.indiceModuloActual];
+  if (!modulo) return;
+  const hist = st.historialPreguntas[modulo];
+  if (hist && hist.length > 0) {
+    const ultimaId = hist.pop();
+    delete st.respuestasPorModulo[modulo][ultimaId];
+    renderPreguntaActual(modulo);
+  } else if (st.indiceModuloActual > 0) {
+    st.indiceModuloActual--;
+    iniciarDiagnosticoModuloActual();
+  } else {
+    irAPaso(3);
+  }
+}
+
+function pasarSiguienteModulo() {
+  st.indiceModuloActual++;
+  iniciarDiagnosticoModuloActual();
+}
+
+// --------------------------- Paso 5: Resumen del diagnóstico -----------------------
+
+/**
+ * Resumen enriquecido: además de las etiquetas por módulo (madurez,
+ * necesidades, dolores, oportunidades), muestra el contexto general del
+ * cliente (Pasos 1 y 3) y el detalle de las respuestas dadas pregunta por
+ * pregunta, para que el COI vea de un vistazo TODO lo que se sabe del
+ * cliente antes de invocar a la IA.
+ */
+function renderResumenDiagnostico() {
+  const cont = document.getElementById('resumenDiagnostico');
+  const c = st.cliente;
+
+  let html = '<div class="tarjeta-resumen contexto-general"><h3>Contexto general del cliente</h3><dl>' +
+    '<div><dt>URL / Sitio web</dt><dd>' + (escapar(c.url) || '—') + '</dd></div>' +
+    '<div><dt>Contexto comercial</dt><dd>' + (escapar(c.contextoComercial) || '—') + '</dd></div>' +
+    '<div><dt>Objetivos</dt><dd>' + (escapar(c.objetivos) || '—') + '</dd></div>' +
+    '<div><dt>Dolores iniciales</dt><dd>' + (escapar(c.doloresIniciales) || '—') + '</dd></div>' +
+    '<div><dt>Información adicional</dt><dd>' + (escapar(c.infoAdicional) || '—') + '</dd></div>' +
+    '<div><dt>Procesos actuales</dt><dd>' + (escapar(c.procesosActuales) || '—') + '</dd></div>' +
+    '<div><dt>Herramientas utilizadas</dt><dd>' + (escapar(c.herramientasUtilizadas) || '—') + '</dd></div>' +
+    '<div><dt>Automatización percibida</dt><dd>' + (escapar(c.nivelAutomatizacion) || '—') + '</dd></div>' +
+    '</dl></div>';
+
+  html += st.diagnosticosPorModulo.map(function (d) {
+    const dj = d.diagnosticoJson;
+    const claseMadurez = 'badge-' + (dj.madurez || 'sin-determinar').toLowerCase().replace(' ', '-');
+    return '<div class="tarjeta-resumen">' +
+      '<h3>' + escapar(d.modulo) + '<span class="badge-madurez ' + claseMadurez + '">Madurez: ' + escapar(dj.madurez || 'Sin determinar') + '</span></h3>' +
+      '<div><strong>Necesidades:</strong><div class="etiquetas">' + etiquetasHtml(dj.principales_necesidades) + '</div></div>' +
+      '<div style="margin-top:8px"><strong>Dolores:</strong><div class="etiquetas">' + etiquetasHtml(dj.dolores) + '</div></div>' +
+      '<div style="margin-top:8px"><strong>Oportunidades (semilla):</strong><div class="etiquetas">' + etiquetasHtml(dj.oportunidades) + '</div></div>' +
+      '<details class="respuestas-detalle"><summary>Ver respuestas del diagnóstico (' + Object.keys(dj.respuestas_originales || {}).length + ')</summary>' +
+      respuestasLegibles_(d.modulo, dj.respuestas_originales) + '</details>' +
+      '</div>';
+  }).join('') || '<p class="alerta-error">No hay diagnósticos completados.</p>';
+
+  cont.innerHTML = html;
+}
+
+function respuestasLegibles_(modulo, respuestas) {
+  if (!respuestas || Object.keys(respuestas).length === 0) return '<p class="hint">Sin respuestas registradas.</p>';
+  const arbol = st.arbolPorModulo[modulo] || [];
+  return Object.keys(respuestas).map(function (pid) {
+    const pregunta = arbol.find(function (p) { return p.id === pid; });
+    const texto = pregunta ? pregunta.pregunta : pid;
+    const valorCrudo = respuestas[pid];
+    const valor = Array.isArray(valorCrudo) ? valorCrudo.join(', ') : valorCrudo;
+    return '<div class="respuesta-item"><strong>' + escapar(texto) + '</strong><span>' + escapar(valor) + '</span></div>';
+  }).join('');
+}
+
+function etiquetasHtml(arr) { return (arr || []).map(function (e) { return '<span class="etiqueta">' + escapar(e) + '</span>'; }).join('') || '<span class="hint">—</span>'; }
+
+function descargarDiagnosticoPDF() {
+  const payload = st.diagnosticosPorModulo.map(function (d) { return { modulo: d.modulo, diagnosticoJson: d.diagnosticoJson }; });
+  llamarServidor('apiGenerarDiagnosticoPDF', st.clienteId, payload).then(function (url) {
+    document.getElementById('resultadoDiagnosticoPDF').innerHTML =
+      '<div class="tarjeta-resumen"><h3>Diagnóstico en PDF listo</h3><p><a href="' + url + '" target="_blank">' + url + '</a></p></div>';
+    mostrarToast('Diagnóstico generado en PDF.', 'exito');
+  }).catch(manejarErrorInesperado_);
+}
+
+/** Botón "Ir a Consultoría y Gestión de Entregables →" al cierre del Paso 5. */
+function irAConsultoria() {
+  document.getElementById('selectorCliente').classList.add('hidden');
+  document.getElementById('subwizardConsultoria').classList.remove('hidden');
+  document.getElementById('nombreClienteActivo').textContent = st.cliente.nombre;
+  st.consultorias = [];
+  st.moduloRevisionActivo = null;
+  mostrarVista('consultoria');
+  irAPaso(6);
+}
+
+// ================== PESTAÑA "CONSULTORÍA Y GESTIÓN DE ENTREGABLES" ==================
+
+/** Clientes cargados en "Diagnóstico Comercial", cacheados para filtrar el buscador sin ir al servidor en cada tecla. */
+function refrescarListaClientes() {
+  listaClientesCache = [];
+  document.getElementById('buscadorCliente').value = '';
+  document.getElementById('sugerenciasClientes').classList.add('hidden');
+  document.getElementById('sugerenciasClientes').innerHTML = '';
+  document.getElementById('previewCliente').classList.add('hidden');
+  document.getElementById('previewCliente').innerHTML = '';
+
+  llamarServidor('apiGetClientesConResumen').then(function (clientes) {
+    listaClientesCache = clientes || [];
+  }).catch(manejarErrorInesperado_);
+}
+
+/** Se llama con cada tecla del buscador: filtra por nombre y muestra hasta 8 sugerencias en un dropdown. */
+function filtrarClientes() {
+  const q = document.getElementById('buscadorCliente').value.trim().toLowerCase();
+  const cont = document.getElementById('sugerenciasClientes');
+
+  if (!q) { cont.classList.add('hidden'); cont.innerHTML = ''; return; }
+  if (!listaClientesCache.length) {
+    cont.innerHTML = '<div class="sugerencia-vacia">Todavía no hay clientes cargados. Ve a la pestaña "Diagnóstico Comercial" para registrar el primero.</div>';
+    cont.classList.remove('hidden');
+    return;
+  }
+
+  const resultados = listaClientesCache.filter(function (c) {
+    return (c.nombre || '').toLowerCase().indexOf(q) !== -1;
+  }).slice(0, 8);
+
+  if (!resultados.length) {
+    cont.innerHTML = '<div class="sugerencia-vacia">No se encontró ninguna empresa con ese nombre.</div>';
+  } else {
+    cont.innerHTML = resultados.map(function (c) {
+      return '<div class="sugerencia-item" onclick="elegirSugerenciaCliente(\'' + c.id + '\')">' +
+        '<strong>' + escapar(c.nombre) + '</strong><span>' + escapar(c.industria || '') + '</span></div>';
+    }).join('');
+  }
+  cont.classList.remove('hidden');
+}
+
+function elegirSugerenciaCliente(clienteId) {
+  const c = listaClientesCache.find(function (x) { return x.id === clienteId; });
+  document.getElementById('sugerenciasClientes').classList.add('hidden');
+  if (!c) return;
+  document.getElementById('buscadorCliente').value = c.nombre;
+  renderPreviewCliente(c);
+}
+
+/** Tarjeta de vista previa (industria, tamaño, módulos, estado) antes de continuar con ese cliente. */
+function renderPreviewCliente(c) {
+  const modulosContratados = c.modulos_contratados || [];
+  const badgesModulos = modulosContratados.map(function (m) {
+    const diagnosticado = (c.modulos_diagnosticados || []).indexOf(m) !== -1;
+    return '<span class="etiqueta" style="' + (diagnosticado ? '' : 'opacity:.5') + '">' + escapar(m) + '</span>';
+  }).join(' ') || '<span class="hint">—</span>';
+  const diagnosticados = (c.modulos_diagnosticados || []).length + ' / ' + modulosContratados.length;
+
+  document.getElementById('previewCliente').innerHTML =
+    '<div class="tarjeta-resumen cliente-preview-card">' +
+    '<h3>' + escapar(c.nombre) + '</h3>' +
+    '<dl class="contexto-general" style="margin:8px 0 0">' +
+    '<div><dt>Ciudad</dt><dd>' + (escapar(c.pais) || '—') + '</dd></div>' +
+    '<div><dt>URL / Sitio web</dt><dd>' + (escapar(c.url) || '—') + '</dd></div>' +
+    '<div><dt>Industria</dt><dd>' + (escapar(c.industria) || '—') + '</dd></div>' +
+    '<div><dt>Tamaño</dt><dd>' + (escapar(c.tamano) || '—') + '</dd></div>' +
+    '<div><dt>Colaboradores</dt><dd>' + (c.colaboradores || '—') + '</dd></div>' +
+    '<div><dt>Diagnosticados</dt><dd>' + diagnosticados + '</dd></div>' +
+    '</dl>' +
+    '<div style="margin-top:12px"><strong>Módulos contratados:</strong><div class="etiquetas">' + badgesModulos + '</div></div>' +
+    '<div style="margin-top:10px">' + resumenEstadoConsultoria_(c.conteo_estados, c.cantidad_consultorias) + '</div>' +
+    '<div class="step-actions" style="margin-top:16px">' +
+    '<button class="btn-primary" onclick="seleccionarCliente(\'' + c.id + '\')">Continuar →</button></div>' +
+    '</div>';
+  document.getElementById('previewCliente').classList.remove('hidden');
+}
+
+function resumenEstadoConsultoria_(conteo, total) {
+  if (!total) return '<span class="estado-pill">Sin consultoría</span>';
+  return Object.keys(conteo || {}).map(function (k) {
+    return '<span class="estado-pill">' + conteo[k] + ' ' + escapar(k) + '</span>';
+  }).join(' ');
+}
+
+/** El COI elige un cliente ya cargado y retoma su consultoría (nueva o ya iniciada). */
+function seleccionarCliente(clienteId) {
+  Promise.all([
+    llamarServidor('apiObtenerCliente', clienteId),
+    llamarServidor('apiObtenerDiagnosticosCliente', clienteId),
+    llamarServidor('apiObtenerConsultoriasCliente', clienteId)
+  ]).then(function (resultados) {
+    const cliente = resultados[0], diagnosticos = resultados[1], consultorias = resultados[2];
+    if (!diagnosticos || diagnosticos.length === 0) {
+      mostrarToast('Este cliente todavía no tiene ningún módulo diagnosticado. Complétalo en "Diagnóstico Comercial".', 'error');
+      return;
+    }
+
+    st.cliente = cliente;
+    st.clienteId = cliente.id;
+    st.diagnosticosPorModulo = diagnosticos.map(function (d) {
+      return { modulo: d.modulo, diagnosticoId: d.id, diagnosticoJson: d.diagnostico_json };
+    });
+    st.arbolPorModulo = {}; // no viene cacheado desde el servidor; el resumen enriquecido no aplica acá
+    st.consultorias = consultorias || [];
+    st.moduloRevisionActivo = null;
+
+    document.getElementById('selectorCliente').classList.add('hidden');
+    document.getElementById('subwizardConsultoria').classList.remove('hidden');
+    document.getElementById('nombreClienteActivo').textContent = cliente.nombre;
+
+    // Si ya había consultorías generadas para este cliente, entra directo a
+    // Revisión; si no, arranca en el paso de generación.
+    irAPaso(st.consultorias.length ? 7 : 6);
+  }).catch(manejarErrorInesperado_);
+}
+
+function cambiarCliente() {
+  document.getElementById('subwizardConsultoria').classList.add('hidden');
+  document.getElementById('selectorCliente').classList.remove('hidden');
+  st.clienteId = null;
+  refrescarListaClientes();
+}
+
+// ------------------------- Generar consultoría COI --------------------------
+
+function generarConsultoriaCOI() {
+  const btn = document.getElementById('btnGenerarConsultoria');
+  btn.disabled = true;
+  document.getElementById('estadoGeneracion').innerHTML = '';
+
+  const payload = st.diagnosticosPorModulo.map(function (d) { return { modulo: d.modulo, diagnosticoId: d.diagnosticoId }; });
+
+  llamarServidor('apiGenerarConsultoria', st.clienteId, payload).then(function (resultado) {
+    st.consultorias = resultado.generadas;
+    btn.disabled = false;
+    if (resultado.errores && resultado.errores.length) {
+      document.getElementById('estadoGeneracion').innerHTML = '<div class="alerta-error">No se pudo generar la consultoría de: ' +
+        resultado.errores.map(function (e) { return e.modulo + ' (' + e.error + ')'; }).join('; ') + '</div>';
+    }
+    mostrarToast('Consultoría generada para ' + resultado.generadas.length + ' módulo(s).', 'exito');
+    irAPaso(7);
+  }).catch(function (e) { btn.disabled = false; manejarErrorInesperado_(e); });
+}
+
+// --------------------------- Revisión de consultoría ------------------------
+
+function renderRevisionConsultoria() {
+  if (!st.consultorias.length) { document.getElementById('revisionConsultoria').innerHTML = '<p class="alerta-error">Aún no se ha generado consultoría.</p>'; return; }
+  if (st.moduloRevisionActivo === null) st.moduloRevisionActivo = 0;
+
+  document.getElementById('tabsModulos').innerHTML = st.consultorias.map(function (c, i) {
+    return '<button class="tab-btn' + (i === st.moduloRevisionActivo ? ' activo' : '') + '" onclick="cambiarTabRevision(' + i + ')">' + escapar(c.modulo) + '</button>';
+  }).join('');
+
+  const c = st.consultorias[st.moduloRevisionActivo];
+  const j = c.contenido_json;
+  const cont = document.getElementById('revisionConsultoria');
+
+  function bloqueTexto(campo, etiqueta, grande) {
+    return '<div class="bloque-revision"><h4>' + etiqueta + '</h4><textarea class="' + (grande ? 'textarea-grande' : '') + '" data-campo="' + campo + '" data-tipo="texto">' + escapar(j[campo] || '') + '</textarea></div>';
+  }
+  function bloqueLista(campo, etiqueta) {
+    return '<div class="bloque-revision"><h4>' + etiqueta + ' <span class="hint">(uno por línea)</span></h4><textarea data-campo="' + campo + '" data-tipo="lista">' + (j[campo] || []).join('\n') + '</textarea></div>';
+  }
+
+  let html = bloqueTexto('diagnostico', 'Diagnóstico', true);
+  html += bloqueLista('necesidades', 'Necesidades');
+  html += bloqueLista('oportunidades', 'Oportunidades');
+  html += bloqueTexto('consultoria_recomendada', 'Consultoría recomendada', true);
+  html += bloqueLista('configuracion_recomendada', 'Configuración recomendada');
+  html += bloqueLista('plantillas_sugeridas', 'Plantillas');
+  html += bloqueLista('comunicaciones', 'Comunicaciones');
+  html += bloqueLista('tareas', 'Tareas');
+  html += bloqueTexto('flujo_recomendado', 'Flujo recomendado');
+  html += bloqueLista('buenas_practicas', 'Buenas prácticas');
+  html += '<div class="bloque-revision"><h4>Prioridad</h4><select data-campo="prioridad" data-tipo="select"><option' + (j.prioridad==='Alta'?' selected':'') + '>Alta</option><option' + (j.prioridad==='Media'?' selected':'') + '>Media</option><option' + (j.prioridad==='Baja'?' selected':'') + '>Baja</option></select></div>';
+  html += bloqueLista('primeros_pasos', 'Primeros pasos');
+
+  html += '<div class="bloque-revision"><h4>Propuestas de valor</h4>' + (j.propuestas_valor || []).map(function (p) {
+    return '<div class="propuesta-card"><strong>' + escapar(p.necesidad || '') + '</strong><p>' + escapar(p.propuesta_completa || '') + '</p></div>';
+  }).join('') + '</div>';
+
+  if (j.trazabilidad && j.trazabilidad.length) {
+    html += '<div class="bloque-revision"><h4>Trazabilidad de la IA</h4>' + j.trazabilidad.map(function (t) {
+      return '<div class="fila-origen"><span class="origen-tag origen-' + t.origen + '">' + t.origen.replace('_',' ') + '</span>' + escapar(t.campo) + ' — ' + escapar(t.detalle || '') + '</div>';
+    }).join('') + '</div>';
+  }
+
+  cont.innerHTML = html;
+}
+
+function cambiarTabRevision(i) { st.moduloRevisionActivo = i; renderRevisionConsultoria(); }
+
+function guardarRevision() {
+  const c = st.consultorias[st.moduloRevisionActivo];
+  const j = Object.assign({}, c.contenido_json);
+  document.querySelectorAll('#revisionConsultoria [data-campo]').forEach(function (el) {
+    const campo = el.getAttribute('data-campo');
+    const tipo = el.getAttribute('data-tipo');
+    if (tipo === 'lista') j[campo] = el.value.split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+    else j[campo] = el.value;
+  });
+  llamarServidor('apiGuardarEdicionConsultoria', c.id, j).then(function (registroActualizado) {
+    st.consultorias[st.moduloRevisionActivo] = registroActualizado;
+    mostrarToast('Cambios guardados para ' + c.modulo + '.', 'exito');
+  }).catch(manejarErrorInesperado_);
+}
+
+// ------------------------------ Aprobación -----------------------------
+
+function renderAprobacion() {
+  document.getElementById('listaAprobacion').innerHTML = st.consultorias.map(function (c) {
+    return '<div class="fila-aprobacion"><div><strong>' + escapar(c.modulo) + '</strong><div class="hint">Prioridad: ' + escapar(c.contenido_json.prioridad || '-') + '</div></div>' +
+      '<span class="estado-pill">' + escapar(c.estado) + '</span></div>';
+  }).join('');
+}
+
+function aprobarTodas() {
+  const promesas = st.consultorias.map(function (c) { return llamarServidor('apiAprobarConsultoria', c.id, c.contenido_json); });
+  Promise.all(promesas).then(function (actualizadas) {
+    st.consultorias = actualizadas;
+    mostrarToast('Consultoría aprobada.', 'exito');
+    irAPaso(9);
+  }).catch(manejarErrorInesperado_);
+}
+
+// ---------------------------- Generar entregable -------------------------
+
+function renderEntregable() {
+  document.getElementById('listaEntregable').innerHTML = st.consultorias.map(function (c) {
+    const aprobada = c.estado === 'Aprobada' || c.estado === 'Entregada';
+    return '<div class="fila-entregable"><label style="display:flex;align-items:center;gap:10px;margin:0;">' +
+      '<input type="checkbox" style="width:auto" data-consultoria="' + c.id + '"' + (aprobada ? ' checked' : ' disabled') + '>' +
+      escapar(c.modulo) + (aprobada ? '' : ' <span class="hint">(no aprobada)</span>') + '</label>' +
+      '<span class="estado-pill">' + escapar(c.estado) + '</span></div>';
+  }).join('');
+}
+
+function generarEntregableFinal() {
+  const seleccionadas = Array.prototype.slice.call(document.querySelectorAll('#listaEntregable input:checked')).map(function (c) { return c.getAttribute('data-consultoria'); });
+  if (seleccionadas.length === 0) { mostrarToast('Selecciona al menos una consultoría aprobada.', 'error'); return; }
+
+  llamarServidor('apiGenerarEntregable', st.clienteId, seleccionadas, 'PDF').then(function (entregable) {
+    document.getElementById('resultadoEntregable').innerHTML =
+      '<div class="tarjeta-resumen"><h3>Entregable en PDF generado</h3><p>El documento se guardó en Google Drive:</p>' +
+      '<p><a href="' + entregable.url + '" target="_blank">' + entregable.url + '</a></p></div>';
+    mostrarToast('Entregable generado con éxito.', 'exito');
+  }).catch(manejarErrorInesperado_);
+}
+
+// --------------------------------- Utilidades -----------------------------------
+
+function escapar(texto) {
+  return String(texto == null ? '' : texto).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
