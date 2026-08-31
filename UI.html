@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <?!= include('Styles'); ?>
+</head>
+<body>
+  <div id="app">
+
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-marca">COE Talento y Cultura</span>
+        <span class="brand-titulo">Gestión de Clientes, Diagnóstico y Consultoría</span>
+        <span class="brand-subtitulo">Impulsado por IA ✨</span>
+      </div>
+      <button class="btn-link" onclick="mostrarVista('historial')">Ver historial</button>
+    </header>
+
+    <nav class="tabs-principales">
+      <button class="tab-principal" id="tabBtn-comercial" onclick="mostrarVista('comercial')">
+        <span class="tab-icono">🧭</span> Diagnóstico Comercial
+      </button>
+      <button class="tab-principal" id="tabBtn-consultoria" onclick="mostrarVista('consultoria')">
+        <span class="tab-icono">📋</span> Consultoría y Gestión de Entregables
+      </button>
+    </nav>
+
+    <main class="wizard-body" id="wizardBody">
+
+      <!-- ============================ VISTA 0: INICIO ============================ -->
+      <div id="vista-landing" class="vista-principal vista-landing">
+        <div class="landing-blob landing-blob-1"></div>
+        <div class="landing-blob landing-blob-2"></div>
+        <div class="landing-hero">
+          <span class="landing-eyebrow">✨ COE Talento y Cultura</span>
+          <h1>Diagnóstico y consultoría de implementación, en un solo lugar</h1>
+        </div>
+        <div class="landing-cards">
+          <button class="landing-card" onclick="mostrarVista('comercial')">
+            <span class="landing-card-icono">🧭</span>
+            <span class="landing-card-titulo">Diagnóstico Comercial</span>
+            <span class="landing-card-desc">Registra al cliente, sus módulos contratados y corre el diagnóstico guiado pregunta por pregunta.</span>
+            <span class="landing-card-cta">Empezar aquí →</span>
+          </button>
+          <button class="landing-card" onclick="mostrarVista('consultoria')">
+            <span class="landing-card-icono">📋</span>
+            <span class="landing-card-titulo">Consultoría y Gestión de Entregables</span>
+            <span class="landing-card-desc">Retoma un cliente ya diagnosticado, genera su consultoría con IA, revísala, apruébala y entrega el PDF final.</span>
+            <span class="landing-card-cta">Continuar →</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- ======================= VISTA 1: DIAGNÓSTICO COMERCIAL ======================= -->
+      <div id="vista-comercial" class="vista-principal hidden">
+
+        <div class="wizard-nav" id="wizardNavComercial"></div>
+
+        <!-- Paso 1: Información comercial -->
+        <section class="step" id="step-1">
+          <h2>1. Información comercial</h2>
+          <p class="hint">Datos del cliente antes de iniciar la implementación.</p>
+          <div class="grid-2">
+            <label>Nombre del cliente *<input type="text" id="f_nombre"></label>
+            <label>Ciudad *<input type="text" id="f_pais" placeholder="Ej: Bogotá, Ciudad de México…"></label>
+            <label>URL / Sitio web<input type="text" id="f_url" placeholder="https://www.empresa.com"></label>
+            <label>Industria *
+              <select id="f_industria">
+                <option value="">Selecciona…</option>
+                <option>Retail</option><option>Tecnología</option><option>Manufactura</option>
+                <option>Servicios</option><option>Salud</option><option>Educación</option><option>Financiero</option>
+              </select>
+            </label>
+            <label>Categoría / segmento *<input type="text" id="f_categoria" placeholder="Ej: Enterprise, PYME, Corporativo"></label>
+            <label>Número de colaboradores *<input type="number" id="f_colaboradores" min="1"></label>
+            <label>Tamaño de la organización *
+              <select id="f_tamano">
+                <option value="">Selecciona…</option>
+                <option>XS (menos de 50 colaboradores)</option>
+                <option>S (50 - 200 colaboradores)</option>
+                <option>M (200 - 1.000 colaboradores)</option>
+                <option>L (más de 1.000 colaboradores)</option>
+              </select>
+            </label>
+          </div>
+          <label>Contexto comercial<textarea id="f_contexto" rows="3" placeholder="Cómo llegó el cliente, qué se conversó en la venta…"></textarea></label>
+          <label>Objetivos principales del cliente<textarea id="f_objetivos" rows="3"></textarea></label>
+          <label>Principales dolores identificados<textarea id="f_dolores" rows="3"></textarea></label>
+          <label>Información adicional relevante<textarea id="f_info" rows="2"></textarea></label>
+          <div class="step-actions"><button class="btn-primary" onclick="irAPaso2()">Siguiente →</button></div>
+        </section>
+
+        <!-- Paso 2: Módulos contratados -->
+        <section class="step hidden" id="step-2">
+          <h2>2. Módulos contratados</h2>
+          <p class="hint">Solo se generará consultoría para los módulos seleccionados aquí.</p>
+          <div id="listaModulos" class="modulos-grid"></div>
+          <div class="step-actions">
+            <button class="btn-secondary" onclick="irAPaso(1)">← Atrás</button>
+            <button class="btn-primary" onclick="avanzarModulos()">Siguiente →</button>
+          </div>
+        </section>
+
+        <!-- Paso 3: Diagnóstico general -->
+        <section class="step hidden" id="step-3">
+          <h2>3. Diagnóstico general</h2>
+          <p class="hint">Contexto general del cliente, independiente del módulo.</p>
+          <label>Procesos actuales<textarea id="f_procesos" rows="2"></textarea></label>
+          <label>Herramientas utilizadas actualmente<textarea id="f_herramientas" rows="2"></textarea></label>
+          <label>Nivel de automatización percibido
+            <select id="f_automatizacion">
+              <option value="">Selecciona…</option>
+              <option>Nulo</option><option>Bajo</option><option>Medio</option><option>Alto</option>
+            </select>
+          </label>
+          <div class="step-actions">
+            <button class="btn-secondary" onclick="irAPaso(2)">← Atrás</button>
+            <button class="btn-primary" onclick="guardarClienteYContinuar()">Guardar y comenzar diagnóstico →</button>
+          </div>
+        </section>
+
+        <!-- Paso 4: Preguntas condicionales -->
+        <section class="step hidden" id="step-4">
+          <h2>4. Preguntas de diagnóstico por módulo</h2>
+          <div id="moduloEnCurso" class="modulo-en-curso"></div>
+          <div id="preguntaActual" class="pregunta-actual"></div>
+          <div class="step-actions">
+            <button class="btn-secondary" onclick="volverPreguntaAnterior()">← Atrás</button>
+          </div>
+        </section>
+
+        <!-- Paso 5: Resumen del diagnóstico -->
+        <section class="step hidden" id="step-5">
+          <h2>5. Resumen del diagnóstico</h2>
+          <div id="resumenDiagnostico"></div>
+          <div class="step-actions">
+            <button class="btn-secondary" onclick="irAPaso(4)">← Revisar respuestas</button>
+            <button class="btn-secondary" onclick="descargarDiagnosticoPDF()">⬇ Descargar diagnóstico (PDF)</button>
+            <button class="btn-generar" onclick="irAConsultoria()">📋 Ir a Consultoría y Gestión de Entregables →</button>
+          </div>
+          <div id="resultadoDiagnosticoPDF"></div>
+        </section>
+
+      </div>
+
+      <!-- ================ VISTA 2: CONSULTORÍA Y GESTIÓN DE ENTREGABLES ================ -->
+      <div id="vista-consultoria" class="vista-principal hidden">
+
+        <!-- Selector de cliente: alimentado por lo cargado en "Diagnóstico Comercial" -->
+        <div id="selectorCliente">
+          <h2>Selecciona un cliente</h2>
+          <p class="hint">Busca por nombre la empresa que el comercial ya cargó y diagnosticó en "Diagnóstico Comercial".</p>
+          <div class="buscador-cliente-wrap" id="buscadorClienteWrap">
+            <input type="text" id="buscadorCliente" class="buscador-cliente" placeholder="Busca la empresa (ej: prueba.co)…" autocomplete="off" oninput="filtrarClientes()" onfocus="filtrarClientes()">
+            <div id="sugerenciasClientes" class="sugerencias-cliente hidden"></div>
+          </div>
+          <div id="previewCliente" class="hidden"></div>
+        </div>
+
+        <!-- Sub-wizard de consultoría, una vez elegido el cliente -->
+        <div id="subwizardConsultoria" class="hidden">
+          <div class="cliente-activo-bar">
+            <span>Cliente activo: <strong id="nombreClienteActivo"></strong></span>
+            <button class="btn-link" onclick="cambiarCliente()">← Cambiar de cliente</button>
+          </div>
+
+          <div class="wizard-nav" id="wizardNavConsultoria"></div>
+
+          <!-- Paso: Generar consultoría -->
+          <section class="step" id="step-6">
+            <h2>Generar consultoría</h2>
+            <p class="hint">Se generará una consultoría independiente para cada módulo diagnosticado, usando el diagnóstico y la base de conocimiento.</p>
+            <div class="step-actions">
+              <button class="btn-generar" id="btnGenerarConsultoria" onclick="generarConsultoriaCOI()">⚡ GENERAR CONSULTORÍA</button>
+            </div>
+            <div id="estadoGeneracion"></div>
+          </section>
+
+          <!-- Paso: Revisión de consultoría -->
+          <section class="step hidden" id="step-7">
+            <h2>Revisión de consultoría</h2>
+            <div id="tabsModulos" class="tabs"></div>
+            <div id="revisionConsultoria"></div>
+            <div class="step-actions">
+              <button class="btn-secondary" onclick="irAPaso(6)">← Atrás</button>
+              <button class="btn-primary" onclick="guardarRevision()">Guardar cambios</button>
+              <button class="btn-primary" onclick="irAPaso(8)">Ir a aprobación →</button>
+            </div>
+          </section>
+
+          <!-- Paso: Aprobación -->
+          <section class="step hidden" id="step-8">
+            <h2>Aprobación</h2>
+            <div id="listaAprobacion"></div>
+            <div class="step-actions">
+              <button class="btn-secondary" onclick="irAPaso(7)">← Atrás</button>
+              <button class="btn-primary" onclick="aprobarTodas()">✔ Aprobar consultoría</button>
+            </div>
+          </section>
+
+          <!-- Paso: Generar entregable -->
+          <section class="step hidden" id="step-9">
+            <h2>Generar entregable</h2>
+            <p class="hint">Selecciona las consultorías aprobadas a incluir en el documento final para el cliente.</p>
+            <div id="listaEntregable"></div>
+            <div class="step-actions">
+              <button class="btn-secondary" onclick="irAPaso(8)">← Atrás</button>
+              <button class="btn-generar" onclick="generarEntregableFinal()">📄 GENERAR ENTREGABLE (PDF)</button>
+            </div>
+            <div id="resultadoEntregable"></div>
+          </section>
+
+        </div>
+      </div>
+
+      <!-- ============================== HISTORIAL ============================== -->
+      <div id="vista-historial" class="vista-principal hidden">
+        <h2>Historial de diagnósticos y consultorías</h2>
+        <button class="btn-link" onclick="mostrarVista(ultimaVistaPrincipal)">← Volver</button>
+        <table class="tabla-historial">
+          <thead><tr><th>Fecha</th><th>Cliente</th><th>Módulo</th><th>Versión</th><th>Estado</th></tr></thead>
+          <tbody id="filasHistorial"></tbody>
+        </table>
+      </div>
+
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+    <div id="overlayCarga" class="overlay hidden"><div class="spinner"></div><p id="overlayTexto">Procesando…</p></div>
+
+  </div>
+
+  <?!= include('JsClient'); ?>
+</body>
+</html>
