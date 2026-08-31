@@ -1,117 +1,133 @@
 /**
- * KnowledgeBase.gs
- * Responsabilidad única: leer y filtrar la Base de Conocimiento COI
- * (hojas MODULOS, PREGUNTAS, OPCIONES, CONOCIMIENTO, PLANTILLAS,
- * PROPUESTAS_VALOR, OPORTUNIDADES).
+ * AI.gs
+ * Responsabilidad única: hablar con la API de IA por HTTP.
+ * No construye prompts (eso es Prompts.gs) ni conoce el esquema de la
+ * consultoría (eso lo valida Consultoria.gs). Este archivo solo sabe
+ * mandar {system, user} y devolver el texto de respuesta, con manejo
+ * de errores robusto (sección 22 del pedido).
  *
- * Este archivo es el que hay que entender para agregar un módulo nuevo:
- * ninguna función de acá referencia el nombre de un módulo específico,
- * todo se resuelve por lo que exista cargado en las hojas.
+ * Proveedor: Google Gemini API (generativelanguage.googleapis.com), elegido
+ * porque tiene un nivel gratuito real (sin tarjeta de crédito) vía Google AI
+ * Studio — ver GUIA_INSTALACION.md sección 5. Si en el futuro se quiere
+ * volver a Anthropic u otro proveedor, este es el ÚNICO archivo que hay que
+ * tocar: construye {system, user} en Prompts.gs y todo lo demás no cambia,
+ * porque todos consumen llamarIA().
  */
 
-function getModulosActivos() {
-  return getAllRows_(SHEETS.MODULOS, getKnowledgeSpreadsheet())
-    .filter(function (m) { return m.activo === true || m.activo === 'TRUE' || m.activo === 'VERDADERO'; })
-    .sort(function (a, b) { return (a.orden || 0) - (b.orden || 0); })
-    .map(function (m) { return { id: m.id, modulo: m.modulo, descripcion: m.descripcion }; });
+const GEMINI_ENDPOINT_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/';
+
+/**
+ * @param {{system: string, user: string}} prompt
+ * @return {string} texto crudo devuelto por el modelo (JSON, porque se
+ *                   fuerza responseMimeType: application/json más abajo).
+ * @throws {AppError} con codigo IA_ERROR | CONFIG_ERROR
+ */
+function llamarIA(prompt) {
+  const apiKey = getApiKey_(); // lanza CONFIG_ERROR si no está configurada
+  const modelo = getAiModel_();
+  const endpoint = GEMINI_ENDPOINT_BASE + modelo + ':generateContent';
+
+  const payload = {
+    system_instruction: { parts: [{ text: prompt.system }] },
+    contents: [{ role: 'user', parts: [{ text: prompt.user }] }],
+    generationConfig: {
+      maxOutputTokens: CONFIG.AI_MAX_TOKENS,
+      temperature: 0.4,
+      responseMimeType: 'application/json' // le pedimos a Gemini que devuelva JSON garantizado
+    }
+  };
+
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { 'x-goog-api-key': apiKey },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  let intento = 0;
+  let ultimoError = null;
+
+  while (intento <= CONFIG.AI_MAX_REINTENTOS) {
+    intento++;
+    let response;
+    try {
+      response = UrlFetchApp.fetch(endpoint, options);
+    } catch (e) {
+      // Errores de red / DNS / servicio caído (UrlFetchApp lanza excepción en esos casos)
+      ultimoError = new AppError('IA_ERROR', 'No se pudo contactar el servicio de IA: ' + e.message);
+      continue;
+    }
+
+    const codigo = response.getResponseCode();
+    const texto = response.getContentText();
+
+    if (codigo === 200) {
+      return extraerTextoRespuesta_(texto);
+    }
+
+    if (codigo === 400) {
+      throw new AppError('IA_ERROR', 'La API de Gemini rechazó la solicitud (posible bloqueo de contenido o payload inválido). Detalle: ' + resumir_(texto));
+    }
+    if (codigo === 401 || codigo === 403) {
+      throw new AppError('CONFIG_ERROR', 'La API Key de IA fue rechazada (código ' + codigo + '). Verifica GEMINI_API_KEY en Propiedades del script.');
+    }
+    if (codigo === 429) {
+      ultimoError = new AppError('IA_ERROR', 'Se alcanzó el límite de solicitudes del nivel gratuito de Gemini. Espera un minuto e intenta de nuevo.');
+      Utilities.sleep(2000);
+      continue; // reintentable
+    }
+    if (codigo >= 500) {
+      ultimoError = new AppError('IA_ERROR', 'El servicio de IA no está disponible en este momento (código ' + codigo + ').');
+      continue; // reintentable
+    }
+    // otros códigos: no tiene sentido reintentar
+    throw new AppError('IA_ERROR', 'La API de IA devolvió un error (código ' + codigo + '): ' + resumir_(texto));
+  }
+
+  throw ultimoError || new AppError('IA_ERROR', 'No se pudo obtener respuesta de la IA tras varios intentos.');
+}
+
+function extraerTextoRespuesta_(jsonTexto) {
+  let data;
+  try {
+    data = JSON.parse(jsonTexto);
+  } catch (e) {
+    throw new AppError('IA_ERROR', 'La respuesta de la IA no es JSON válido a nivel HTTP.');
+  }
+
+  if (data.promptFeedback && data.promptFeedback.blockReason) {
+    throw new AppError('IA_ERROR', 'Gemini bloqueó la generación por su filtro de contenido (motivo: ' + data.promptFeedback.blockReason + ').');
+  }
+  const candidato = data.candidates && data.candidates[0];
+  const texto = candidato && candidato.content && candidato.content.parts && candidato.content.parts[0] && candidato.content.parts[0].text;
+  if (!texto) {
+    const razon = candidato ? candidato.finishReason : 'sin candidatos';
+    throw new AppError('IA_ERROR', 'La respuesta de la IA no tiene el formato esperado (finishReason: ' + razon + ').');
+  }
+  return texto;
 }
 
 /**
- * Devuelve el árbol de preguntas de un módulo: preguntas raíz con sus
- * opciones, y para cada opción, las preguntas hijas que dispara.
- * La UI recorre este árbol y solo pinta lo que corresponde según lo
- * que el usuario ya respondió (ver JsClient.html -> renderPreguntaActual).
+ * Extrae y parsea el JSON que la IA debió devolver como único contenido.
+ * Con responseMimeType: 'application/json' ya viene garantizado por Gemini,
+ * pero igual toleramos que se haya "colado" un bloque ```json ... ``` y
+ * damos un error claro si no es parseable en vez de fallar silenciosamente.
  */
-function getArbolPreguntas(modulo) {
-  const ss = getKnowledgeSpreadsheet();
-  const preguntas = getAllRows_(SHEETS.PREGUNTAS, ss).filter(function (p) { return p.modulo === modulo; });
-  const opciones = getAllRows_(SHEETS.OPCIONES, ss);
+function parsearRespuestaJSON(texto) {
+  let limpio = texto.trim();
+  const fenceMatch = limpio.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) limpio = fenceMatch[1].trim();
 
-  const opcionesPorPregunta = {};
-  opciones.forEach(function (o) {
-    if (!opcionesPorPregunta[o.pregunta_id]) opcionesPorPregunta[o.pregunta_id] = [];
-    opcionesPorPregunta[o.pregunta_id].push({
-      id: o.id,
-      valor: o.valor,
-      etiqueta_necesidad: o.etiqueta_necesidad,
-      etiqueta_dolor: o.etiqueta_dolor,
-      peso_madurez: Number(o.peso_madurez) || 0
-    });
-  });
-
-  return preguntas
-    .sort(function (a, b) { return (a.orden || 0) - (b.orden || 0); })
-    .map(function (p) {
-      return {
-        id: p.id,
-        pregunta: p.pregunta,
-        tipo: p.tipo,
-        obligatoria: !!p.obligatoria,
-        ayuda: p.ayuda || '',
-        preguntaPadreId: p.pregunta_padre_id || null,
-        valorPadreDispara: p.valor_padre_dispara || null,
-        opciones: opcionesPorPregunta[p.id] || []
-      };
-    });
+  try {
+    return JSON.parse(limpio);
+  } catch (e) {
+    throw new AppError('IA_ERROR',
+      'La IA devolvió una respuesta que no se pudo interpretar como JSON. ' +
+      'Intenta generar la consultoría nuevamente. Detalle técnico: ' + e.message);
+  }
 }
 
-/**
- * Filtra CONOCIMIENTO priorizando coincidencias específicas sobre "General".
- * Ejemplo: si existe una fila (modulo=Onboarding, industria=Retail,
- * tamaño=General, madurez=Baja) y otra (modulo=Onboarding, industria=General,
- * tamaño=General, madurez=Baja), se devuelven ambas, pero marcadas con su
- * nivel de especificidad para que Prompts.gs pueda darle más peso a la
- * primera. No se inventa contenido: si no hay filas, se devuelve [].
- */
-function getConocimientoRelevante(modulo, industria, tamano, madurez) {
-  const rows = getAllRows_(SHEETS.CONOCIMIENTO, getKnowledgeSpreadsheet())
-    .filter(function (r) {
-      if (r.activo === false || r.activo === 'FALSE') return false;
-      if (r.modulo !== modulo) return false;
-      const okIndustria = r.industria === 'General' || r.industria === industria;
-      const okTamano = r.tamano === 'General' || r.tamano === tamano;
-      const okMadurez = r.madurez === 'General' || r.madurez === madurez;
-      return okIndustria && okTamano && okMadurez;
-    });
-
-  return rows.map(function (r) {
-    const especificidad =
-      (r.industria !== 'General' ? 1 : 0) +
-      (r.tamano !== 'General' ? 1 : 0) +
-      (r.madurez !== 'General' ? 1 : 0);
-    return {
-      id: r.id, tipo: r.tipo, categoria: r.categoria, contenido: r.contenido, especificidad: especificidad
-    };
-  }).sort(function (a, b) { return b.especificidad - a.especificidad; });
-}
-
-function getPlantillasRelevantes(modulo, industria) {
-  return getAllRows_(SHEETS.PLANTILLAS, getKnowledgeSpreadsheet())
-    .filter(function (r) {
-      if (r.activo === false || r.activo === 'FALSE') return false;
-      return r.modulo === modulo && (r.industria === 'General' || r.industria === industria);
-    })
-    .map(function (r) { return { id: r.id, tipo: r.tipo, nombre: r.nombre, contenido: r.contenido }; });
-}
-
-/** Propuestas de valor "semilla" para las necesidades detectadas por el motor de reglas. */
-function getPropuestasValorBase(modulo, necesidades) {
-  if (!necesidades || necesidades.length === 0) return [];
-  return getAllRows_(SHEETS.PROPUESTAS_VALOR, getKnowledgeSpreadsheet())
-    .filter(function (r) {
-      if (r.activo === false || r.activo === 'FALSE') return false;
-      return r.modulo === modulo && necesidades.indexOf(r.necesidad) !== -1;
-    })
-    .map(function (r) { return { necesidad: r.necesidad, propuesta: r.propuesta }; });
-}
-
-function getOportunidadesBase(necesidades) {
-  if (!necesidades || necesidades.length === 0) return [];
-  const todas = getAllRows_(SHEETS.OPORTUNIDADES, getKnowledgeSpreadsheet());
-  const resultado = [];
-  necesidades.forEach(function (n) {
-    todas.filter(function (r) { return r.necesidad === n; })
-      .forEach(function (r) { resultado.push(r.oportunidad_base); });
-  });
-  return resultado;
+function resumir_(texto) {
+  return (texto || '').substring(0, 300);
 }
