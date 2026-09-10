@@ -26,13 +26,24 @@ function inicializarBaseDeDatos() {
   crearHojaConEncabezados_(ss, SHEETS.PLANTILLAS, ['id', 'modulo', 'industria', 'tipo', 'nombre', 'contenido', 'activo']);
   crearHojaConEncabezados_(ss, SHEETS.PROPUESTAS_VALOR, ['id', 'modulo', 'necesidad', 'propuesta', 'activo']);
   crearHojaConEncabezados_(ss, SHEETS.OPORTUNIDADES, ['id', 'necesidad', 'oportunidad_base']);
+  crearHojaConEncabezados_(ss, SHEETS.HERRAMIENTAS, ['id', 'nombre', 'url', 'modulo', 'tipo', 'etapa', 'uso_recomendado']);
 
   crearHojaConEncabezados_(ss, SHEETS.CLIENTES, ['id', 'nombre', 'pais', 'url', 'industria', 'categoria', 'colaboradores', 'tamano',
     'modulos_contratados', 'contexto_comercial', 'objetivos', 'dolores_iniciales', 'info_adicional',
-    'procesos_actuales', 'herramientas_utilizadas', 'nivel_automatizacion', 'fecha_creacion', 'usuario']);
+    'procesos_actuales', 'herramientas_utilizadas', 'nivel_automatizacion', 'usa_herramientas_ofimaticas',
+    'account_manager', 'ae_acompana_kickoff', 'dominio_cliente',
+    'lider_nombre', 'lider_celular', 'lider_correo',
+    'lider_estrategico_nombre', 'lider_estrategico_celular', 'lider_estrategico_correo',
+    'sedes_ubicacion', 'usaba_otra_plataforma', 'otra_plataforma_cual',
+    'motivo_compra_buk', 'cultura_frase', 'sesiones_grupales', 'estructura_equipo',
+    'integracion_sso', 'integracion_api', 'dominio_correo',
+    'modulo_inicio_deseado', 'fecha_fin_esperada', 'comentarios_tiempos', 'observaciones_modulos_json',
+    'fecha_creacion', 'usuario']);
   crearHojaConEncabezados_(ss, SHEETS.DIAGNOSTICOS, ['id', 'cliente_id', 'modulo', 'respuestas_json', 'diagnostico_json', 'fecha']);
+  crearHojaConEncabezados_(ss, SHEETS.KICKOFF, ['id', 'cliente_id', 'notas_gemini', 'contexto', 'necesidades_json',
+    'procesos_json', 'expectativas_json', 'fecha', 'usuario']);
   crearHojaConEncabezados_(ss, SHEETS.CONSULTORIAS, ['id', 'cliente_id', 'modulo', 'diagnostico_id', 'contenido_json', 'version',
-    'estado', 'fecha_generacion', 'fecha_aprobacion', 'usuario_aprobador']);
+    'estado', 'fecha_generacion', 'fecha_aprobacion', 'usuario_aprobador', 'seguimiento_json']);
   crearHojaConEncabezados_(ss, SHEETS.ENTREGABLES, ['id', 'cliente_id', 'consultoria_ids', 'tipo', 'url', 'fecha', 'usuario']);
 
   poblarModulos_();
@@ -40,6 +51,7 @@ function inicializarBaseDeDatos() {
   ['Gestión del Desempeño', 'Selección', 'Encuestas / Clima', 'Reconocimiento', 'Comunicaciones',
     'Beneficios', 'Canal de Denuncias', 'Servicio al Colaborador', 'API'].forEach(poblarModuloBasico_);
   poblarPropuestasValorYOportunidades_();
+  poblarHerramientas_();
 
   Logger.log('Base de datos inicializada correctamente. Revisa las pestañas del spreadsheet.');
 }
@@ -64,7 +76,7 @@ function poblarModulos_() {
     ['mod_beneficios', 'Beneficios', 'Gestión, comunicación y administración de beneficios para colaboradores.', true, 7],
     ['mod_denuncias', 'Canal de Denuncias', 'Canal de reporte y gestión de denuncias e investigaciones internas.', true, 8],
     ['mod_servicio_colaborador', 'Servicio al Colaborador', 'Atención de solicitudes y casos del colaborador (mesa de ayuda de RRHH).', true, 9],
-    ['mod_api', 'API', 'Integraciones y automatizaciones vía API con otros sistemas del cliente.', true, 10]
+    ['mod_workflow', 'Workflow', 'Automatización de flujos de aprobación y procesos entre áreas.', true, 10]
   ];
   modulos.forEach(function (m) {
     appendRow_(SHEETS.MODULOS, { id: m[0], modulo: m[1], descripcion: m[2], activo: m[3], orden: m[4] });
@@ -255,6 +267,344 @@ function poblarPropuestasValorYOportunidades_() {
   });
 }
 
+/**
+ * Catálogo inicial de la Biblioteca de Magia (sección 7 y 8 del rediseño):
+ * los 4 AppScripts confirmados + 4 filas "pendiente de link" para que el
+ * equipo solo tenga que pegar la URL cuando la tenga — sin tocar código
+ * (arquitectura lista, sección 13.8 del pedido).
+ */
+function poblarHerramientas_() {
+  const herramientas = [
+    ['herr_objetivos', 'Asistente Objetivos', 'https://script.google.com/a/macros/buk.co/s/AKfycbz0bQH7Jtjh7XB9yCVniF1q5_SxUs9rYg6u9TXFmIRGlnbOdN4Ro3LlK9Hst3pgM5ml/exec',
+      'Gestión del Desempeño', 'Generador de documento', 'Consultoría', 'Estructura objetivos y metas sugeridas para clientes que no los tienen definidos.'],
+    ['herr_competencias', 'Asistente Competencias Buk', 'https://script.google.com/a/macros/buk.co/s/AKfycbw-9gxfIemoUpor9Zix8ie0T9K7kaZwAum7yYpqrTRXzSRN7OC-8I1fpJnr9YGQbBTpdQ/exec',
+      'Gestión del Desempeño', 'Generador de documento', 'Consultoría', 'Genera un marco de competencias, indicadores conductuales y niveles de desarrollo.'],
+    ['herr_onboarding', 'Asistente Onboarding Buk', 'https://script.google.com/a/macros/buk.co/s/AKfycby7g_h2bDWxLjHI1OB7YjtcYzxN4XuIUaFgv8uk9LyKtF4RPb_cbcM8Qfhyjcx7_ErK/exec',
+      'Onboarding', 'Generador de documento/plan', 'Consultoría', 'Sugiere el flujo de onboarding, campos del formulario de pre-ingreso, tareas y correos.'],
+    ['herr_encuestas', 'Encuestas', 'https://script.google.com/a/macros/buk.co/s/AKfycbykgKb0apSsVH3DrcJO5-imnkr_SU2y80tPO4B8rsPHtr936zCEJYHJAgIdU7L3ni6T/exec',
+      'Encuestas / Clima', '', '', ''],
+    ['herr_servicio_colaborador', 'Servicio al Colaborador', '', 'Servicio al Colaborador', '', '', ''],
+    ['herr_comunicaciones', 'Comunicaciones y Reconocimientos', '', 'Comunicaciones', '', '', ''],
+    ['herr_beneficios', 'Beneficios', '', 'Beneficios', '', '', ''],
+    ['herr_workflow', 'Workflow', '', 'API', '', '', '']
+  ];
+  herramientas.forEach(function (h) {
+    appendRow_(SHEETS.HERRAMIENTAS, { id: h[0], nombre: h[1], url: h[2], modulo: h[3], tipo: h[4], etapa: h[5], uso_recomendado: h[6] });
+  });
+}
+
+/**
+ * Para una base de datos que YA fue inicializada y tiene datos de clientes
+ * cargados: agrega la etapa Kick Off COE y la Biblioteca de Magia SIN BORRAR
+ * NADA de lo existente (mismo patrón seguro que agregarModulosCOE_).
+ * Es la única función nueva que hay que correr en un proyecto que ya está
+ * en uso — reemplaza el intento anterior (agregarHerramientasCOE_, revertido).
+ *
+ * Para correrla: en el editor de Apps Script, abre este archivo
+ * (SetupSheets.gs), en el desplegable de funciones (junto al botón
+ * "Ejecutar", arriba) selecciona "agregarFaseKickOffYMagia" y presiona
+ * Ejecutar. Es segura de correr más de una vez: si una hoja ya existe o la
+ * columna ya fue agregada, no la vuelve a tocar.
+ */
+function agregarFaseKickOffYMagia() {
+  const ss = getSpreadsheet();
+
+  const yaExistiaKickoff = !!ss.getSheetByName(SHEETS.KICKOFF);
+  if (!yaExistiaKickoff) {
+    crearHojaConEncabezados_(ss, SHEETS.KICKOFF, ['id', 'cliente_id', 'notas_gemini', 'contexto', 'necesidades_json',
+      'procesos_json', 'expectativas_json', 'fecha', 'usuario']);
+  }
+
+  const yaExistiaHerramientas = !!ss.getSheetByName(SHEETS.HERRAMIENTAS);
+  if (!yaExistiaHerramientas) {
+    crearHojaConEncabezados_(ss, SHEETS.HERRAMIENTAS, ['id', 'nombre', 'url', 'modulo', 'tipo', 'etapa', 'uso_recomendado']);
+    poblarHerramientas_();
+  }
+
+  agregarColumnaSiFalta_(ss, SHEETS.CONSULTORIAS, 'seguimiento_json');
+
+  Logger.log('Listo: Kick Off COE y Biblioteca de Magia agregados (o ya existían). Nada existente fue modificado ni borrado.');
+}
+
+/** Agrega `nombreColumna` al final de los encabezados de `nombreHoja` si todavía no existe. No toca filas ya cargadas. */
+function agregarColumnaSiFalta_(ss, nombreHoja, nombreColumna) {
+  const sheet = ss.getSheetByName(nombreHoja);
+  if (!sheet) return; // si la hoja no existe todavía, no hay nada que agregar
+  const ultimaCol = sheet.getLastColumn();
+  const headers = sheet.getRange(1, 1, 1, ultimaCol).getValues()[0].map(function (h) { return String(h).trim(); });
+  if (headers.indexOf(nombreColumna) !== -1) return; // ya existe
+  sheet.getRange(1, ultimaCol + 1).setValue(nombreColumna).setFontWeight('bold').setBackground('#1e3a8a').setFontColor('#ffffff');
+}
+
 function slug_(texto) {
   return texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+}
+
+// =====================================================================
+// ACTUALIZACIÓN "DIAGNÓSTICO COMERCIAL" (ajuste de contenido y campos,
+// pedido posterior al rediseño visual — NO toca Kick Off, Consultoría
+// ni Biblioteca de Magia). Para una base de datos que YA está en uso:
+// agrega columnas nuevas a CLIENTES sin borrar nada, agrega el módulo
+// "Workflow", desactiva "API" como módulo contratable (pasa a ser un
+// checkbox de integración, sección "Módulos especiales"), y REEMPLAZA
+// el árbol de preguntas de 9 módulos por la versión superficial en
+// tercera persona pedida para esta etapa (la profundización queda para
+// el Kick Off). Es seguro volver a correrla: las columnas no se
+// duplican y el árbol de cada módulo se limpia antes de recrearse.
+//
+// Para correrla: en el editor de Apps Script, selecciona
+// "actualizarDiagnosticoComercial" en el desplegable de funciones y
+// presiona Ejecutar.
+// =====================================================================
+
+function actualizarDiagnosticoComercial() {
+  const ss = getSpreadsheet();
+
+  [
+    'usa_herramientas_ofimaticas',
+    'account_manager', 'ae_acompana_kickoff', 'dominio_cliente',
+    'lider_nombre', 'lider_celular', 'lider_correo',
+    'lider_estrategico_nombre', 'lider_estrategico_celular', 'lider_estrategico_correo',
+    'sedes_ubicacion', 'usaba_otra_plataforma', 'otra_plataforma_cual',
+    'motivo_compra_buk', 'cultura_frase', 'sesiones_grupales', 'estructura_equipo',
+    'integracion_sso', 'integracion_api', 'dominio_correo',
+    'modulo_inicio_deseado', 'fecha_fin_esperada', 'comentarios_tiempos', 'observaciones_modulos_json'
+  ].forEach(function (col) { agregarColumnaSiFalta_(ss, SHEETS.CLIENTES, col); });
+
+  agregarModuloWorkflowYDesactivarApi_();
+
+  reemplazarArbolPreguntas_('Gestión del Desempeño', poblarPreguntasDesempenoComercial_);
+  reemplazarArbolPreguntas_('Selección', poblarPreguntasSeleccionComercial_);
+  reemplazarArbolPreguntas_('Encuestas / Clima', poblarPreguntasEncuestasComercial_);
+  reemplazarArbolPreguntas_('Onboarding', poblarPreguntasOnboardingComercial_);
+  reemplazarArbolPreguntas_('Reconocimiento', poblarPreguntasReconocimientoComercial_);
+  reemplazarArbolPreguntas_('Comunicaciones', poblarPreguntasComunicacionesComercial_);
+  reemplazarArbolPreguntas_('Beneficios', poblarPreguntasBeneficiosComercial_);
+  reemplazarArbolPreguntas_('Servicio al Colaborador', poblarPreguntasServicioColaboradorComercial_);
+  reemplazarArbolPreguntas_('Canal de Denuncias', poblarPreguntasCanalDenunciasComercial_);
+
+  agregarOportunidadesDiagnosticoComercial_();
+
+  Logger.log('Diagnóstico Comercial actualizado: columnas nuevas en CLIENTES, módulo Workflow agregado ' +
+    '(API pasa a checkbox de integración), y árbol de preguntas de 9 módulos reemplazado por la versión ' +
+    'superficial en tercera persona. Nada de Kick Off, Consultoría o Biblioteca de Magia fue modificado.');
+}
+
+/** Agrega el módulo "Workflow" al checklist de módulos contratables (si no existe) y desactiva
+ * "API" como módulo contratable: en el nuevo diseño, API es un checkbox de integración especial
+ * dentro de la pestaña "Módulos", no un módulo que se contrata. No se borra la fila de MODULOS ni
+ * las preguntas ya cargadas para "API", para no perder diagnósticos ya guardados con ese módulo. */
+function agregarModuloWorkflowYDesactivarApi_() {
+  const ss = getKnowledgeSpreadsheet();
+  const modulos = getAllRows_(SHEETS.MODULOS, ss);
+
+  const yaExisteWorkflow = modulos.some(function (m) { return m.modulo === 'Workflow'; });
+  if (!yaExisteWorkflow) {
+    appendRow_(SHEETS.MODULOS, {
+      id: 'mod_workflow', modulo: 'Workflow',
+      descripcion: 'Automatización de flujos de aprobación y procesos entre áreas.', activo: true, orden: 10
+    }, ss);
+    poblarModuloBasico_('Workflow');
+  }
+
+  const filaApi = modulos.find(function (m) { return m.modulo === 'API'; });
+  if (filaApi && filaApi.activo !== false && filaApi.activo !== 'FALSE') {
+    updateRowById_(SHEETS.MODULOS, filaApi.id, { activo: false }, ss);
+  }
+}
+
+/** Borra todas las preguntas (y sus opciones) de `modulo` y vuelve a cargarlas con `construirFn`.
+ * Solo toca PREGUNTAS/OPCIONES — no borra CONOCIMIENTO, PLANTILLAS ni diagnósticos ya guardados
+ * de clientes (esos quedan tal cual se respondieron, con el árbol vigente en su momento). */
+function reemplazarArbolPreguntas_(modulo, construirFn) {
+  const ss = getSpreadsheet();
+  const idsExistentes = getAllRows_(SHEETS.PREGUNTAS, ss)
+    .filter(function (p) { return p.modulo === modulo; })
+    .map(function (p) { return String(p.id); });
+
+  idsExistentes.forEach(function (id) { eliminarFilasDondeIgual_(SHEETS.OPCIONES, 'pregunta_id', id, ss); });
+  eliminarFilasDondeIgual_(SHEETS.PREGUNTAS, 'modulo', modulo, ss);
+
+  construirFn();
+}
+
+/** Elimina (de abajo hacia arriba, para no desfasar índices) las filas de `nombreHoja` donde
+ * `columna` sea igual a `valor`. Helper genérico de limpieza — usado solo por actualizaciones
+ * de contenido que necesitan reemplazar filas ya cargadas, nunca por el flujo normal de la app. */
+function eliminarFilasDondeIgual_(nombreHoja, columna, valor, spreadsheet) {
+  const sheet = getSheet_(nombreHoja, spreadsheet);
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return;
+  const headers = values[0].map(function (h) { return String(h).trim(); });
+  const col = headers.indexOf(columna);
+  if (col === -1) return;
+  for (let i = values.length - 1; i >= 1; i--) {
+    if (String(values[i][col]) === String(valor)) sheet.deleteRow(i + 1);
+  }
+}
+
+/** Agrega una necesidad/oportunidad semilla a OPORTUNIDADES solo si esa `necesidad` no existe
+ * todavía (evita duplicados si la función de actualización se corre más de una vez). */
+function agregarOportunidadSiFalta_(necesidad, oportunidadBase) {
+  const ss = getKnowledgeSpreadsheet();
+  const yaExiste = getAllRows_(SHEETS.OPORTUNIDADES, ss).some(function (o) { return o.necesidad === necesidad; });
+  if (yaExiste) return;
+  appendRow_(SHEETS.OPORTUNIDADES, { id: generarId_('op'), necesidad: necesidad, oportunidad_base: oportunidadBase }, ss);
+}
+
+function agregarOportunidadesDiagnosticoComercial_() {
+  agregarOportunidadSiFalta_('Definición de competencias y objetivos',
+    'Construir un marco de competencias y objetivos claros por cargo y área, como base de un proceso de evaluación de desempeño estructurado.');
+  agregarOportunidadSiFalta_('Implementación de evaluación de desempeño',
+    'Formalizar un ciclo de evaluación de desempeño con metodología, periodicidad y evaluadores definidos.');
+  agregarOportunidadSiFalta_('Implementación de encuesta de clima',
+    'Levantar una primera medición de clima organizacional para contar con una línea base antes de intervenir.');
+  agregarOportunidadSiFalta_('Implementación de programa de reconocimiento',
+    'Diseñar un programa de reconocimiento formal, alineado a los valores corporativos que la organización quiere destacar.');
+  agregarOportunidadSiFalta_('Gestión de beneficios centralizada',
+    'Centralizar la administración, aprobación y comunicación de beneficios en una sola plataforma, dejando atrás procesos manuales o en Excel.');
+  agregarOportunidadSiFalta_('Segmentación de consultas del colaborador',
+    'Organizar los canales de atención al colaborador por tipo de consulta para reducir tiempos de respuesta y dar trazabilidad.');
+  agregarOportunidadSiFalta_('Protocolo de canal de denuncias',
+    'Formalizar un protocolo de escalamiento y un comité de ética/denuncias, alineado con los requerimientos legales del sector.');
+}
+
+// ---------------- Árboles de preguntas — Diagnóstico Comercial (superficial) ----------------
+// Todas formuladas como pregunta directa en tercera persona (la responde el Comercial sobre el
+// cliente). Donde existe una versión más profunda para el Kick Off, acá solo va la superficial.
+
+function poblarPreguntasDesempenoComercial_() {
+  const M = 'Gestión del Desempeño';
+
+  pregunta_('p_desc_1', M, '¿Tienen definidas competencias y objetivos estructurados por cargo y área?', 'radio', 1, true, null, null, '');
+  opciones_('p_desc_1', [
+    ['Sí', '', '', 4],
+    ['No', 'Definición de competencias y objetivos', 'Falta de objetivos y competencias estructuradas por cargo', 0]
+  ]);
+
+  pregunta_('p_desc_2', M, '¿Han realizado evaluaciones de desempeño antes?', 'radio', 2, true, null, null, '');
+  opciones_('p_desc_2', [
+    ['Sí', '', '', 3],
+    ['No', 'Implementación de evaluación de desempeño', 'Ausencia de evaluaciones formales de desempeño', 0]
+  ]);
+  pregunta_('p_desc_2b', M, '¿Cómo realizan actualmente las evaluaciones de desempeño (plataforma)?', 'texto', 3, false, 'p_desc_2', 'Sí', '');
+
+  pregunta_('p_desc_3', M, '¿Qué tipo de evaluadores participarían en la evaluación?', 'checkbox', 4, true, null, null, 'Selecciona todas las que apliquen.');
+  opciones_('p_desc_3', [['Autoevaluación', '', '', 0], ['Pares', '', '', 0], ['Descendente', '', '', 0], ['Ascendente', '', '', 0]]);
+}
+
+function poblarPreguntasSeleccionComercial_() {
+  const M = 'Selección';
+
+  pregunta_('p_sel_1', M, '¿Cómo llevan a cabo sus procesos de selección hoy?', 'texto', 1, true, null, null, '');
+  pregunta_('p_sel_2', M, '¿Utilizan Elempleo, Computrabajo, LinkedIn u otra plataforma?', 'checkbox', 2, false, null, null, 'Selecciona todas las que apliquen.');
+  opciones_('p_sel_2', [['Elempleo', '', '', 0], ['Computrabajo', '', '', 0], ['LinkedIn', '', '', 0], ['Otra', '', '', 0]]);
+  pregunta_('p_sel_3', M, '¿Cuál es el dominio del correo electrónico que manejan para agendar entrevistas?', 'texto', 3, false, null, null, '');
+}
+
+function poblarPreguntasEncuestasComercial_() {
+  const M = 'Encuestas / Clima';
+
+  pregunta_('p_enc_1', M, '¿Han realizado encuestas de clima anteriormente?', 'radio', 1, true, null, null, '');
+  opciones_('p_enc_1', [
+    ['Sí', '', '', 3],
+    ['No', 'Implementación de encuesta de clima', 'Sin medición formal de clima organizacional', 0]
+  ]);
+  pregunta_('p_enc_1b', M, '¿Qué metodología han utilizado para sus encuestas de clima?', 'texto', 2, false, 'p_enc_1', 'Sí', '');
+  pregunta_('p_enc_2', M, '¿Qué tipo de encuestas libres (adicionales a clima) desean realizar en Buk?', 'texto', 3, false, null, null, '');
+}
+
+function poblarPreguntasOnboardingComercial_() {
+  const M = 'Onboarding';
+
+  pregunta_('p_ob2_1', M, '¿Cuánto dura el proceso de onboarding actual, si existe?', 'texto', 1, true, null, null, '');
+  pregunta_('p_ob2_2', M, '¿Quién lidera el onboarding hoy?', 'radio', 2, true, null, null, '');
+  opciones_('p_ob2_2', [['RR. HH.', '', '', 0], ['Jefe directo', '', '', 0], ['Ambos', '', '', 0]]);
+}
+
+function poblarPreguntasReconocimientoComercial_() {
+  const M = 'Reconocimiento';
+
+  pregunta_('p_rec_1', M, '¿Actualmente manejan algún programa de reconocimiento (formal o informal)?', 'radio', 1, true, null, null, '');
+  opciones_('p_rec_1', [
+    ['Sí', '', '', 3],
+    ['No', 'Implementación de programa de reconocimiento', 'Sin programa de reconocimiento formal', 0]
+  ]);
+  pregunta_('p_rec_1a', M, '¿De qué tipo es el programa de reconocimiento que manejan?', 'texto', 2, false, 'p_rec_1', 'Sí', '');
+  pregunta_('p_rec_1b', M, '¿Qué valores corporativos les gustaría destacar al reconocer a las personas?', 'texto', 3, false, 'p_rec_1', 'No', '');
+}
+
+function poblarPreguntasComunicacionesComercial_() {
+  const M = 'Comunicaciones';
+
+  pregunta_('p_com_1', M, '¿Qué tipo de comunicaciones desean gestionar en Buk (fechas especiales, procesos, reglamentos)?', 'texto', 1, true, null, null, '');
+  pregunta_('p_com_2', M, '¿Qué tan frecuente es la comunicación desde el liderazgo hacia los colaboradores?', 'radio', 2, true, null, null, '');
+  opciones_('p_com_2', [
+    ['Frecuente', '', '', 4],
+    ['Ocasional', '', '', 2],
+    ['Poco frecuente', 'Mejora de comunicación', 'Comunicación poco frecuente desde el liderazgo', 0]
+  ]);
+}
+
+function poblarPreguntasBeneficiosComercial_() {
+  const M = 'Beneficios';
+
+  pregunta_('p_ben_1', M, '¿Qué beneficios ofrecen hoy en día, cómo se aprueban y cómo los administran (manual, Excel, otra plataforma)?', 'texto', 1, true, null, null, '');
+  pregunta_('p_ben_2', M, '¿Tienen alianzas o convenios vigentes?', 'radio', 2, false, null, null, '');
+  opciones_('p_ben_2', [['Sí', '', '', 0], ['No', '', '', 0]]);
+  pregunta_('p_ben_3', M, '¿El presupuesto de beneficios está definido o se construirá desde cero?', 'radio', 3, true, null, null, '');
+  opciones_('p_ben_3', [
+    ['Definido', '', '', 3],
+    ['Se construirá desde cero', 'Gestión de beneficios centralizada', 'Presupuesto de beneficios sin definir', 0]
+  ]);
+}
+
+function poblarPreguntasServicioColaboradorComercial_() {
+  const M = 'Servicio al Colaborador';
+
+  pregunta_('p_sc_1', M, '¿Cuántos asientos se contrataron?', 'texto', 1, true, null, null, '');
+  pregunta_('p_sc_2', M, '¿Cuentan hoy en día con un chat ya organizado por cada flujo de conversación?', 'radio', 2, true, null, null, '');
+  opciones_('p_sc_2', [
+    ['Sí', '', '', 3],
+    ['No', 'Segmentación de consultas del colaborador', 'Canales de atención sin organizar por flujo de conversación', 0]
+  ]);
+  pregunta_('p_sc_3', M, '¿Qué tipo de consultas reciben con mayor frecuencia?', 'texto', 3, false, null, null, '');
+}
+
+function poblarPreguntasCanalDenunciasComercial_() {
+  const M = 'Canal de Denuncias';
+
+  pregunta_('p_cd_1', M, '¿Manejan hoy en día procesos de denuncia y cómo los escalan actualmente?', 'texto', 1, true, null, null, '');
+  pregunta_('p_cd_2', M, '¿Cuentan con algún protocolo de escalamiento, comité ya conformado o requerimiento legal específico del sector?', 'radio', 2, true, null, null, '');
+  opciones_('p_cd_2', [
+    ['Sí', '', '', 3],
+    ['No', 'Protocolo de canal de denuncias', 'Sin protocolo de escalamiento formal ni comité conformado', 0]
+  ]);
+}
+
+// =====================================================================
+// FLUJO "RADIOGRAFÍA DEL CLIENTE" (Kick Off): Información Comercial →
+// Preguntas Orientadoras → Kick Off → Notas Gemini → Radiografía.
+// La Radiografía es el resultado de cruzar el Diagnóstico Comercial con
+// las notas de la sesión de Kick Off (pegadas o traídas desde un Google
+// Doc por URL) — ver KickOff.gs -> generarRadiografia(). Esto NO
+// reemplaza el flujo anterior de "Estructurar con IA" (contexto/
+// necesidades/procesos/expectativas, columnas ya existentes en KICKOFF):
+// se agregan columnas nuevas, aditivas, a la misma hoja.
+//
+// Para correrla: en el editor de Apps Script, selecciona
+// "agregarRadiografiaKickOff" en el desplegable de funciones y
+// presiona Ejecutar. Segura de correr más de una vez.
+// =====================================================================
+
+function agregarRadiografiaKickOff() {
+  const ss = getSpreadsheet();
+  if (!ss.getSheetByName(SHEETS.KICKOFF)) {
+    crearHojaConEncabezados_(ss, SHEETS.KICKOFF, ['id', 'cliente_id', 'notas_gemini', 'contexto', 'necesidades_json',
+      'procesos_json', 'expectativas_json', 'fecha', 'usuario']);
+  }
+  ['notas_gemini_url', 'fuente_notas', 'radiografia_json', 'alertas_json', 'fecha_radiografia']
+    .forEach(function (col) { agregarColumnaSiFalta_(ss, SHEETS.KICKOFF, col); });
+
+  Logger.log('Listo: columnas de Radiografía agregadas a KICKOFF (o ya existían). Nada existente fue modificado ni borrado.');
 }
