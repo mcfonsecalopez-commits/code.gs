@@ -11,16 +11,28 @@
 
     <header class="app-header">
       <div class="brand">
-        <span class="brand-marca">COE Talento y Cultura</span>
+        <span class="brand-marca">Célula Talento y Cultura</span>
         <span class="brand-titulo">Gestión de Clientes, Diagnóstico y Consultoría</span>
-        <span class="brand-subtitulo">Impulsado por IA ✨</span>
+        <span class="brand-tagline">Juntos creamos lugares de trabajo más felices</span>
       </div>
-      <button class="btn-link" onclick="mostrarVista('historial')">Ver historial</button>
+      <div class="header-acciones">
+        <button class="btn-link" onclick="mostrarVista('historial')">Ver historial</button>
+        <div style="position:relative">
+          <button class="btn-hat" onclick="abrirBibliotecaMagia()" aria-label="Biblioteca de Simuladores">
+            📚<span class="sparkle">✨</span>
+          </button>
+          <div class="btn-hat-tooltip">Biblioteca de Simuladores</div>
+        </div>
+        <button class="btn-home" onclick="mostrarVista('landing')" aria-label="Ir al inicio" title="Home">🏠</button>
+      </div>
     </header>
 
     <nav class="tabs-principales">
       <button class="tab-principal" id="tabBtn-comercial" onclick="mostrarVista('comercial')">
         <span class="tab-icono">🧭</span> Diagnóstico Comercial
+      </button>
+      <button class="tab-principal" id="tabBtn-kickoff" onclick="mostrarVista('kickoff')">
+        <span class="tab-icono">🚀</span> Kick Off COE
       </button>
       <button class="tab-principal" id="tabBtn-consultoria" onclick="mostrarVista('consultoria')">
         <span class="tab-icono">📋</span> Consultoría y Gestión de Entregables
@@ -34,9 +46,11 @@
         <div class="landing-blob landing-blob-1"></div>
         <div class="landing-blob landing-blob-2"></div>
         <div class="landing-hero">
-          <span class="landing-eyebrow">✨ COE Talento y Cultura</span>
-          <h1>Diagnóstico y consultoría de implementación, en un solo lugar</h1>
+          <span class="landing-eyebrow">✨ Célula Talento y Cultura</span>
         </div>
+
+        <div class="journey" id="journeyLanding"></div>
+
         <div class="landing-cards">
           <button class="landing-card" onclick="mostrarVista('comercial')">
             <span class="landing-card-icono">🧭</span>
@@ -44,10 +58,16 @@
             <span class="landing-card-desc">Registra al cliente, sus módulos contratados y corre el diagnóstico guiado pregunta por pregunta.</span>
             <span class="landing-card-cta">Empezar aquí →</span>
           </button>
+          <button class="landing-card kickoff" onclick="mostrarVista('kickoff')">
+            <span class="landing-card-icono">🚀</span>
+            <span class="landing-card-titulo">Kick Off COE</span>
+            <span class="landing-card-desc">Conduce la sesión con las Preguntas Orientadoras y genera la Radiografía del Cliente cruzando las notas de Kick Off con el Diagnóstico Comercial.</span>
+            <span class="landing-card-cta">Continuar →</span>
+          </button>
           <button class="landing-card" onclick="mostrarVista('consultoria')">
             <span class="landing-card-icono">📋</span>
             <span class="landing-card-titulo">Consultoría y Gestión de Entregables</span>
-            <span class="landing-card-desc">Retoma un cliente ya diagnosticado, genera su consultoría con IA, revísala, apruébala y entrega el PDF final.</span>
+            <span class="landing-card-desc">Retoma un cliente ya diagnosticado, genera su consultoría, revísala, apruébala y entrega el PDF final.</span>
             <span class="landing-card-cta">Continuar →</span>
           </button>
         </div>
@@ -58,14 +78,42 @@
 
         <div class="wizard-nav" id="wizardNavComercial"></div>
 
-        <!-- Paso 1: Información comercial -->
+        <!-- Paso 1: Comercial -->
         <section class="step" id="step-1">
-          <h2>1. Información comercial</h2>
-          <p class="hint">Datos del cliente antes de iniciar la implementación.</p>
+          <h2>1. Comercial</h2>
+          <p class="hint">Datos del cliente antes de iniciar la implementación. Lo diligencia el Comercial, antes del Kick Off.</p>
+
+          <div class="subseccion-titulo">Identificación y contacto</div>
           <div class="grid-2">
-            <label>Nombre del cliente *<input type="text" id="f_nombre"></label>
+            <label>Tipo de proyecto *
+              <select id="f_tipo_proyecto">
+                <option value="Kick Off">Kick Off</option>
+                <option value="Traspaso">Traspaso</option>
+                <option value="Upselling">Upselling</option>
+              </select>
+            </label>
+            <label>Account Manager *<input type="text" id="f_account_manager"></label>
+            <label>Nombre de la empresa *<input type="text" id="f_nombre"></label>
             <label>Ciudad *<input type="text" id="f_pais" placeholder="Ej: Bogotá, Ciudad de México…"></label>
+            <label>Dominio del cliente<input type="text" id="f_dominio_cliente" placeholder="Ej: empresa.com"></label>
             <label>URL / Sitio web<input type="text" id="f_url" placeholder="https://www.empresa.com"></label>
+            <label>Fecha de diligenciamiento<input type="text" id="f_fecha_diligenciamiento" disabled></label>
+          </div>
+          <label>¿Estará el Account Executive acompañando el Kick Off?</label>
+          <div class="toggle-si-no" id="toggle_ae_kickoff" data-campo="f_ae_kickoff"></div>
+
+          <p class="hint" style="margin-top:18px">Responsables de implementación por parte del cliente</p>
+          <div class="grid-2">
+            <label>Líder — Nombre<input type="text" id="f_lider_nombre"></label>
+            <label>Líder — Celular<input type="text" id="f_lider_celular"></label>
+            <label>Líder — Correo<input type="text" id="f_lider_correo"></label>
+            <label>Líder estratégico — Nombre <span class="hint">(si aplica)</span><input type="text" id="f_lider_estrategico_nombre"></label>
+            <label>Líder estratégico — Celular<input type="text" id="f_lider_estrategico_celular"></label>
+            <label>Líder estratégico — Correo<input type="text" id="f_lider_estrategico_correo"></label>
+          </div>
+
+          <div class="subseccion-titulo">Datos de la empresa</div>
+          <div class="grid-2">
             <label>Industria *
               <select id="f_industria">
                 <option value="">Selecciona…</option>
@@ -74,7 +122,6 @@
               </select>
             </label>
             <label>Categoría / segmento *<input type="text" id="f_categoria" placeholder="Ej: Enterprise, PYME, Corporativo"></label>
-            <label>Número de colaboradores *<input type="number" id="f_colaboradores" min="1"></label>
             <label>Tamaño de la organización *
               <select id="f_tamano">
                 <option value="">Selecciona…</option>
@@ -84,19 +131,50 @@
                 <option>L (más de 1.000 colaboradores)</option>
               </select>
             </label>
+            <label>¿Cuál es su número de sedes o ubicación geográfica? <span class="hint">(opcional)</span><input type="text" id="f_sedes"></label>
           </div>
-          <label>Contexto comercial<textarea id="f_contexto" rows="3" placeholder="Cómo llegó el cliente, qué se conversó en la venta…"></textarea></label>
-          <label>Objetivos principales del cliente<textarea id="f_objetivos" rows="3"></textarea></label>
-          <label>Principales dolores identificados<textarea id="f_dolores" rows="3"></textarea></label>
+          <label>¿Usaban otra plataforma para llevar sus procesos de Talento Humano?</label>
+          <div class="toggle-si-no" id="toggle_otra_plataforma" data-campo="f_otra_plataforma"></div>
+          <div class="campo-condicional hidden" id="wrap_otra_plataforma_cual">
+            <label>¿Cuál plataforma?<input type="text" id="f_otra_plataforma_cual"></label>
+          </div>
+
+          <div class="subseccion-titulo">Contexto de implementación</div>
+          <label>¿Cuáles son los objetivos principales del cliente y sus principales dolores?<textarea id="f_objetivos_dolores" rows="3"></textarea></label>
+          <label>¿Por qué decidieron contratar Buk?<textarea id="f_motivo_buk" rows="2"></textarea></label>
+          <label>Describe la cultura de este cliente en una frase *<input type="text" id="f_cultura"></label>
+          <label>¿Están dispuestos a participar en sesiones grupales para lograr una implementación más ágil?</label>
+          <div class="toggle-si-no" id="toggle_sesiones_grupales" data-campo="f_sesiones_grupales"></div>
+          <label>¿Cuál es la estructura del equipo que hará la implementación? <span class="hint">(ej. Equipo de TI + jefes de área)</span><textarea id="f_estructura_equipo" rows="2"></textarea></label>
           <label>Información adicional relevante<textarea id="f_info" rows="2"></textarea></label>
+          <label>Contexto comercial<textarea id="f_contexto" rows="3" placeholder="Cómo llegó el cliente, qué se conversó en la venta…"></textarea></label>
+
           <div class="step-actions"><button class="btn-primary" onclick="irAPaso2()">Siguiente →</button></div>
         </section>
 
         <!-- Paso 2: Módulos contratados -->
         <section class="step hidden" id="step-2">
-          <h2>2. Módulos contratados</h2>
+          <h2>2. Módulos</h2>
           <p class="hint">Solo se generará consultoría para los módulos seleccionados aquí.</p>
           <div id="listaModulos" class="modulos-grid"></div>
+          <div id="observacionesModulos"></div>
+
+          <div class="subseccion-titulo">Módulos especiales / integraciones</div>
+          <div class="grid-2">
+            <label style="flex-direction:row;align-items:center;gap:8px;display:flex"><input type="checkbox" id="f_sso" style="width:auto"> SSO</label>
+            <label style="flex-direction:row;align-items:center;gap:8px;display:flex"><input type="checkbox" id="f_api" style="width:auto"> API</label>
+          </div>
+          <label>¿Cuál es el dominio del correo electrónico que manejan? <span class="hint">(opcional)</span><input type="text" id="f_dominio_correo"></label>
+
+          <div class="subseccion-titulo">Tiempos</div>
+          <div class="grid-2">
+            <label>¿Cuál es el módulo de inicio deseado?
+              <select id="f_modulo_inicio"><option value="">Selecciona…</option></select>
+            </label>
+            <label>¿Qué expectativa de fin de implementación tiene el cliente?<input type="date" id="f_fecha_fin"></label>
+          </div>
+          <label>Comentarios<input type="text" id="f_comentarios_tiempos"></label>
+
           <div class="step-actions">
             <button class="btn-secondary" onclick="irAPaso(1)">← Atrás</button>
             <button class="btn-primary" onclick="avanzarModulos()">Siguiente →</button>
@@ -115,6 +193,8 @@
               <option>Nulo</option><option>Bajo</option><option>Medio</option><option>Alto</option>
             </select>
           </label>
+          <label>¿Utilizan herramientas ofimáticas?</label>
+          <div class="toggle-si-no" id="toggle_ofimaticas" data-campo="f_ofimaticas"></div>
           <div class="step-actions">
             <button class="btn-secondary" onclick="irAPaso(2)">← Atrás</button>
             <button class="btn-primary" onclick="guardarClienteYContinuar()">Guardar y comenzar diagnóstico →</button>
@@ -138,11 +218,93 @@
           <div class="step-actions">
             <button class="btn-secondary" onclick="irAPaso(4)">← Revisar respuestas</button>
             <button class="btn-secondary" onclick="descargarDiagnosticoPDF()">⬇ Descargar diagnóstico (PDF)</button>
-            <button class="btn-generar" onclick="irAConsultoria()">📋 Ir a Consultoría y Gestión de Entregables →</button>
+            <button class="btn-generar" onclick="mostrarVista('kickoff')">🚀 Continuar a Kick Off COE →</button>
           </div>
           <div id="resultadoDiagnosticoPDF"></div>
         </section>
 
+      </div>
+
+      <!-- ============================ VISTA KICK OFF COE ============================ -->
+      <div id="vista-kickoff" class="vista-principal hidden">
+
+        <!-- Selector de cliente: mismo patrón que en Consultoría, con ids propios para no interferir con esa pestaña -->
+        <div id="selectorClienteKickoff">
+          <h2>Selecciona un cliente</h2>
+          <p class="hint">Busca por nombre o revisa la lista completa de clientes ya cargados en "Diagnóstico Comercial" — los que ya tienen módulos diagnosticados aparecen primero.</p>
+          <div class="buscador-cliente-wrap" id="buscadorClienteKickoffWrap">
+            <input type="text" id="buscadorClienteKickoff" class="buscador-cliente" placeholder="Busca la empresa (ej: prueba.co)… o haz clic para ver la lista completa" autocomplete="off" oninput="filtrarClientesKickoff()" onfocus="filtrarClientesKickoff()">
+            <div id="sugerenciasClientesKickoff" class="sugerencias-cliente hidden"></div>
+          </div>
+          <div id="previewClienteKickoff" class="hidden"></div>
+        </div>
+
+        <div id="subwizardKickoff" class="hidden">
+          <div class="cliente-activo-bar">
+            <span>Cliente activo: <strong id="nombreClienteActivoKickoff"></strong></span>
+            <button class="btn-link" onclick="cambiarClienteKickoff()">← Cambiar de cliente</button>
+          </div>
+
+          <div class="journey compacto" id="journeyKickoff"></div>
+
+          <h2>Kick Off COE</h2>
+          <div class="kickoff-intro">
+            🚀 Primero conduce la sesión apoyándote en las Preguntas Orientadoras y, después de la reunión,
+            genera la Radiografía del Cliente cruzando las notas de esa sesión con el Diagnóstico Comercial
+            ya registrado. La Radiografía pasa directamente a la Consultoría y a la Gestión de Entregables.
+          </div>
+
+          <div class="kickoff-botones-principales">
+            <button class="btn-secondary btn-kickoff-accion" onclick="abrirPreguntasOrientadoras()">💬 Preguntas Orientadoras</button>
+            <button class="btn-generar btn-kickoff-accion" onclick="toggleRadiografiaPanel()">📜 Generar Radiografía</button>
+          </div>
+
+          <div id="panelRadiografia" class="panel-radiografia hidden">
+            <div class="subseccion-titulo">Notas de la sesión de Kick Off</div>
+
+            <label>URL del documento de notas de Gemini
+              <div class="fila-url-notas">
+                <input type="text" id="rad_notas_url" placeholder="https://docs.google.com/document/d/…">
+                <button class="btn-secondary" onclick="traerNotasDesdeUrl()">Traer notas</button>
+              </div>
+            </label>
+            <p class="hint">Funciona si el documento fue generado por Gemini en Google Meet y tu cuenta tiene acceso a él.</p>
+
+            <label>…o pega aquí las notas manualmente
+              <textarea id="rad_notas_texto" rows="6" placeholder="Pega aquí las notas o la transcripción de la sesión…" oninput="onNotasRadiografiaCambiaron()"></textarea>
+            </label>
+
+            <div id="estadoNotasRadiografia" class="hint"></div>
+
+            <div class="step-actions">
+              <button class="btn-generar" id="btnGenerarRadiografia" onclick="generarRadiografiaCOE()" disabled>🩻 Generar Radiografía</button>
+            </div>
+
+            <div id="estadoRadiografia"></div>
+          </div>
+
+          <div id="resultadoRadiografia"></div>
+
+          <div id="kickoffVacio" class="kickoff-vacio">
+            Todavía no se ha generado una Radiografía para este cliente. Utiliza el botón "Generar Radiografía" para crearla a partir de las notas de la sesión de Kick Off.
+          </div>
+        </div>
+      </div>
+
+      <!-- ===================== MODAL: PREGUNTAS ORIENTADORAS (Kick Off) ===================== -->
+      <div id="modalPreguntasOrientadoras" class="modal-overlay hidden" onclick="if(event.target===this) cerrarPreguntasOrientadoras()">
+        <div class="modal-box modal-box-ancho">
+          <div class="modal-magia-header">
+            <button class="modal-cerrar" onclick="cerrarPreguntasOrientadoras()">✕</button>
+            <h2>💬 Preguntas Orientadoras</h2>
+            <p>Guía para conducir la conversación de Kick Off — no es un cuestionario genérico: el COE puede
+              usarlas como referencia y hacer las preguntas con sus propias palabras.</p>
+          </div>
+          <div class="modal-magia-filtros">
+            <input type="text" id="orientadorasBuscar" placeholder="Buscar una pregunta o un módulo…" oninput="renderPreguntasOrientadoras()">
+          </div>
+          <div class="modal-magia-lista orientadoras-lista" id="orientadorasLista"></div>
+        </div>
       </div>
 
       <!-- ================ VISTA 2: CONSULTORÍA Y GESTIÓN DE ENTREGABLES ================ -->
@@ -164,6 +326,21 @@
           <div class="cliente-activo-bar">
             <span>Cliente activo: <strong id="nombreClienteActivo"></strong></span>
             <button class="btn-link" onclick="cambiarCliente()">← Cambiar de cliente</button>
+          </div>
+
+          <div class="journey compacto" id="journeyConsultoria"></div>
+
+          <div id="resumenKickOffConsultoria"></div>
+
+          <div class="asistente-experto-card">
+            <div class="asistente-experto-info">
+              <div class="asistente-experto-icono">🧠</div>
+              <div>
+                <strong>Asistente Experto COE</strong>
+                <p class="hint">Entrenado con la metodología de todos los módulos — úsalo como apoyo para enriquecer esta consultoría.</p>
+              </div>
+            </div>
+            <a class="btn-generar" href="https://gemini.google.com/gem/1L7e9-mYY-cRZTlKnfifvOwJIX0ziuLuT?usp=drive_link" target="_blank" rel="noopener">✨ Abrir asistente →</a>
           </div>
 
           <div class="wizard-nav" id="wizardNavConsultoria"></div>
@@ -210,6 +387,22 @@
               <button class="btn-generar" onclick="generarEntregableFinal()">📄 GENERAR ENTREGABLE (PDF)</button>
             </div>
             <div id="resultadoEntregable"></div>
+
+            <hr class="separador-seccion">
+
+            <h2>🚀 Playbook Técnico y Presentación Ejecutiva</h2>
+            <p class="hint">Pega acá el contenido que te dio tu Gema de Gemini para generar el Playbook Técnico en PDF y, si quieres, también la Presentación Ejecutiva.</p>
+            <label>Entregables técnicos (ruta de Coimplementación)</label>
+            <textarea id="gema_entregables" rows="4" placeholder="Pega acá la ruta y los entregables técnicos que te dio la Gema..."></textarea>
+            <label>Oportunidades futuras (módulos semilla)</label>
+            <textarea id="gema_oportunidades" rows="3" placeholder="Pega acá las oportunidades o módulos futuros sugeridos..."></textarea>
+            <label>Resumen para la Presentación Ejecutiva</label>
+            <textarea id="gema_resumen_ppt" rows="3" placeholder="Pega acá el resumen ejecutivo para la Presentación (PPT)..."></textarea>
+            <div class="step-actions">
+              <button class="btn-primary" onclick="generarPlaybookCOE()">🚀 Generar Estructura y Enviar PDF a mi Correo</button>
+              <button class="btn-generar" onclick="descargarEntregablesDuales()">⬇ Descargar Entregables (PDF + PPT)</button>
+            </div>
+            <div id="resultadoGemaCOE"></div>
           </section>
 
         </div>
@@ -220,15 +413,38 @@
         <h2>Historial de diagnósticos y consultorías</h2>
         <button class="btn-link" onclick="mostrarVista(ultimaVistaPrincipal)">← Volver</button>
         <table class="tabla-historial">
-          <thead><tr><th>Fecha</th><th>Cliente</th><th>Módulo</th><th>Versión</th><th>Estado</th></tr></thead>
+          <thead><tr><th>Cliente</th><th>Tipo de proyecto</th><th>Diagnóstico Comercial</th><th>Consultoría</th><th>Radiografía</th></tr></thead>
           <tbody id="filasHistorial"></tbody>
         </table>
+        <div id="resultadoDiagnosticoComercialHistorial"></div>
       </div>
 
     </main>
 
     <div id="toast" class="toast hidden"></div>
-    <div id="overlayCarga" class="overlay hidden"><div class="spinner"></div><p id="overlayTexto">Procesando…</p></div>
+    <div id="overlayCarga" class="overlay hidden">
+      <div class="spinner-feliz" aria-hidden="true">
+        <div class="spinner-feliz-anillo"></div>
+        <div class="spinner-feliz-cara"><span class="spinner-feliz-boca"></span></div>
+      </div>
+      <p id="overlayTexto">Los COE&rsquo;s creamos lugares de trabajo más felices</p>
+    </div>
+
+    <!-- ============================ BIBLIOTECA DE MAGIA ============================ -->
+    <div id="modalMagia" class="modal-overlay hidden" onclick="if(event.target===this) cerrarBibliotecaMagia()">
+      <div class="modal-box">
+        <div class="modal-magia-header">
+          <button class="modal-cerrar" onclick="cerrarBibliotecaMagia()">✕</button>
+          <h2>📚 Biblioteca de Simuladores T&amp;C</h2>
+          <p>Simuladores de cada módulo del equipo T&amp;C, organizados por módulo, para facilitar la gestión de entregables y brindar la mejor consultoría.</p>
+        </div>
+        <div class="modal-magia-filtros">
+          <input type="text" id="magiaBuscar" placeholder="Buscar por nombre…" oninput="renderHerramientasMagia()">
+          <select id="magiaFiltroModulo" onchange="renderHerramientasMagia()"><option value="">Todos los módulos</option></select>
+        </div>
+        <div class="modal-magia-lista" id="magiaLista"></div>
+      </div>
+    </div>
 
   </div>
 
