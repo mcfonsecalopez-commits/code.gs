@@ -67,8 +67,19 @@ function generarConsultoriaModulo_(cliente, diagnosticoGeneral, modulo, diagnost
   const conocimiento = getConocimientoRelevante(modulo, cliente.industria, cliente.tamano, diagnosticoModulo.madurez);
   const plantillas = getPlantillasRelevantes(modulo, cliente.industria);
   const propuestasBase = getPropuestasValorBase(modulo, diagnosticoModulo.principales_necesidades);
+  // Integración Diagnóstico + Kick Off/Radiografía -> Consultoría (sección 4 del
+  // rediseño, extendida por el flujo de Radiografía): si el cliente ya tiene una
+  // Radiografía generada (Diagnóstico Comercial + Notas de Kick Off ya cruzados
+  // y clasificados por módulo — ver KickOff.gs), esa es la fuente preferida: es
+  // más rica y ya viene organizada por módulo. Si todavía no existe Radiografía
+  // pero sí un Kick Off del flujo anterior, se usa como respaldo para no romper
+  // clientes que ya venían de ese flujo. Ambas llamadas devuelven null si el
+  // cliente no tiene el registro correspondiente (no es un error — son
+  // opcionales para poder generar consultoría, igual que antes).
+  const kickOff = obtenerKickOff(cliente.id);
+  const radiografia = obtenerRadiografia(cliente.id);
 
-  const prompt = construirPromptModulo(cliente, diagnosticoGeneral, diagnosticoModulo, conocimiento, plantillas, propuestasBase);
+  const prompt = construirPromptModulo(cliente, diagnosticoGeneral, diagnosticoModulo, conocimiento, plantillas, propuestasBase, kickOff, radiografia);
   const textoIA = llamarIA(prompt);
   const contenido = parsearRespuestaJSON(textoIA);
 
@@ -131,4 +142,15 @@ function aprobarConsultoria(consultoriaId, contenidoFinal) {
   }
   cambiarEstadoConsultoria_(consultoriaId, ESTADOS_CONSULTORIA.APROBADA);
   return obtenerConsultoria_(consultoriaId);
+}
+
+/**
+ * Consultoría guiada (sección 5 del rediseño): el COE, junto con el cliente,
+ * marca cada punto clave de la revisión como Aplica / No aplica / Requiere
+ * ajuste. `seguimiento` es un objeto libre { "campo:indice": "aplica" |
+ * "no_aplica" | "ajustar" } que arma JsClient.html — acá solo se persiste,
+ * sin validar su forma exacta (no es parte del contrato de la IA).
+ */
+function guardarSeguimientoConsultoria(consultoriaId, seguimiento) {
+  return guardarSeguimientoConsultoria_(consultoriaId, seguimiento || {});
 }
