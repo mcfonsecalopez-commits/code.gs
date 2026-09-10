@@ -12,7 +12,7 @@
 function doGet(e) {
   return HtmlService.createTemplateFromFile('UI')
     .evaluate()
-    .setTitle('COE Talento y Cultura')
+    .setTitle('Célula Talento y Cultura')
     .setFaviconUrl('https://www.gstatic.com/images/branding/product/1x/apps_script_48dp.png')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
@@ -89,7 +89,7 @@ function apiObtenerDiagnosticosCliente(clienteId) {
 }
 
 function validarCamposCliente_(d) {
-  const requeridos = ['nombre', 'pais', 'industria', 'categoria', 'colaboradores', 'tamano'];
+  const requeridos = ['nombre', 'pais', 'industria', 'categoria', 'tamano', 'culturaFrase'];
   const faltantes = requeridos.filter(function (campo) { return !d[campo] && d[campo] !== 0; });
   if (faltantes.length > 0) {
     throw new AppError('DATOS_INCOMPLETOS', 'Faltan campos obligatorios de información comercial: ' + faltantes.join(', '));
@@ -137,10 +137,94 @@ function apiGenerarDiagnosticoPDF(clienteId, diagnosticosPorModulo) {
   return ejecutarSeguro_(function () { return generarDiagnosticoPDF(clienteId, diagnosticosPorModulo); });
 }
 
+/** Checklist de seguimiento de la consultoría guiada (sección 5 del rediseño). */
+function apiGuardarSeguimientoConsultoria(consultoriaId, seguimiento) {
+  return ejecutarSeguro_(function () { return guardarSeguimientoConsultoria(consultoriaId, seguimiento); });
+}
+
+// -------------------------------- Kick Off COE ---------------------------------
+// Nueva etapa intermedia Diagnóstico -> Kick Off COE -> Consultoría (sección 3).
+
+/** Botón "Estructurar con IA": solo interpreta el texto, no lo guarda todavía. */
+function apiEstructurarKickOffIA(notasGemini) {
+  return ejecutarSeguro_(function () { return estructurarKickOffConIA(notasGemini); });
+}
+
+/** Botón "Guardar Kick Off": guarda la versión que el COE ya revisó/editó. */
+function apiGuardarKickOff(clienteId, datos, notasGemini) {
+  return ejecutarSeguro_(function () { return guardarKickOff(clienteId, datos, notasGemini); });
+}
+
+/** Para prellenar la vista si el cliente ya tiene un Kick Off guardado (null si no hay ninguno). */
+function apiObtenerKickOffCliente(clienteId) {
+  return ejecutarSeguro_(function () { return obtenerKickOff(clienteId); });
+}
+
+// ------------------------- Radiografía del Cliente -------------------------
+// Flujo Información Comercial -> Preguntas Orientadoras -> Kick Off -> Notas
+// Gemini -> Radiografía (ver KickOff.gs).
+
+/** Botón "🩻 Generar Radiografía": cruza Diagnóstico Comercial + Notas de Kick Off. */
+function apiGenerarRadiografia(clienteId, notasGemini, notasGeminiUrl) {
+  return ejecutarSeguro_(function () { return generarRadiografia(clienteId, notasGemini, notasGeminiUrl); });
+}
+
+/** Para prellenar la vista si el cliente ya tiene una Radiografía guardada (null si no hay ninguna). */
+function apiObtenerRadiografiaCliente(clienteId) {
+  return ejecutarSeguro_(function () { return obtenerRadiografia(clienteId); });
+}
+
+/** Trae el texto de un Google Doc por su URL (notas de Gemini de Google Meet). */
+function apiObtenerNotasDesdeUrl(url) {
+  return ejecutarSeguro_(function () { return obtenerNotasDesdeUrl(url); });
+}
+
+/** Auto-detección de cliente a partir del texto/título de las notas — nunca decide sola, solo sugiere. */
+function apiBuscarClienteParaNotas(texto, titulo) {
+  return ejecutarSeguro_(function () { return buscarClienteParaNotas(texto, titulo); });
+}
+
+/** Botón "📄 Descargar Radiografía (PDF)" dentro del resultado de Kick Off. */
+function apiGenerarRadiografiaPDF(clienteId) {
+  return ejecutarSeguro_(function () { return generarRadiografiaPDF(clienteId); });
+}
+
+/** Columna "Diagnóstico Comercial" (📝) del Historial: genera el PDF a partir de lo ya guardado en Sheets. */
+function apiGenerarDiagnosticoComercialPDF(clienteId) {
+  return ejecutarSeguro_(function () { return generarDiagnosticoComercialPDF(clienteId); });
+}
+
+// ----------------------------- Biblioteca de Magia -----------------------------
+// Catálogo de AppScripts del equipo COE (sección 7 del rediseño).
+
+function apiGetHerramientas() {
+  return ejecutarSeguro_(function () { return obtenerHerramientas_(); });
+}
+
+function apiGetHerramientasPorModulos(modulos) {
+  return ejecutarSeguro_(function () { return obtenerHerramientasPorModulos_(modulos); });
+}
+
+// ------------------- Playbook y Presentación (Gema COE) ---------------------
+// Paso 9 (Entregables): además del PDF de la consultoría, el COE puede generar
+// un Playbook Técnico (y, si quiere, también la Presentación Ejecutiva a partir
+// de una plantilla de Slides) con el contenido que trae de su Gema de Gemini
+// — ver GemaIntegracion.gs.
+
+/** Botón "🚀 Generar Playbook y Enviarlo a mi Correo". */
+function apiGenerarPlaybookYNotificar(clienteId, datosGema) {
+  return ejecutarSeguro_(function () { return generarPlaybookYNotificar(clienteId, datosGema); });
+}
+
+/** Botón "⬇ Descargar Entregables (PDF + PPT)". */
+function apiGenerarEntregablesDuales(clienteId, datosGema) {
+  return ejecutarSeguro_(function () { return generarEntregablesDuales(clienteId, datosGema); });
+}
+
 // -------------------------------- Historial ---------------------------------
 
 function apiGetHistorial() {
-  return ejecutarSeguro_(function () { return obtenerHistorial_(); });
+  return ejecutarSeguro_(function () { return obtenerHistorialClientes_(); });
 }
 
 function apiGetConsultoria(consultoriaId) {
