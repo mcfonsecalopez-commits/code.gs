@@ -4,12 +4,17 @@
  * Lógica de cliente. Todo el estado vive en el objeto `st` (en memoria del
  * navegador, se pierde al recargar — el respaldo real vive en Sheets).
  *
- * La app tiene dos vistas principales:
+ * La app tiene tres vistas principales, que reflejan el journey
+ * Diagnóstico -> Kick Off COE -> Consultoría:
  *  - "comercial": Pasos 1 a 5 (Información comercial → Resumen del diagnóstico).
+ *  - "kickoff": selector de cliente + estructuración con IA de las notas de
+ *    Gemini de la sesión de Kick Off (contexto, necesidades, procesos, expectativas).
  *  - "consultoria": selector de cliente (alimentado por lo cargado en la vista
  *    "comercial") + Pasos 6 a 9 (Generar consultoría → Entregable) para el
- *    cliente elegido.
- * Un tercer contenedor ("historial") se superpone a ambas.
+ *    cliente elegido, ya personalizada con lo que haya en su Kick Off.
+ * Un cuarto contenedor ("historial") se superpone a las tres, y la Biblioteca
+ * de Magia (catálogo de AppScripts) vive en un modal aparte, accesible desde
+ * el sombrero del encabezado en cualquier vista.
  */
 
 const PASOS_COMERCIAL = [1,2,3,4,5];
@@ -17,8 +22,191 @@ const NOMBRES_PASO_COMERCIAL = {1:'Comercial',2:'Módulos',3:'Diagnóstico',4:'P
 const PASOS_CONSULTORIA = [6,7,8,9];
 const NOMBRES_PASO_CONSULTORIA = {6:'Consultoría',7:'Revisión',8:'Aprobación',9:'Entregable'};
 
-let ultimaVistaPrincipal = null; // 'comercial' | 'consultoria' — desde dónde se llegó a "historial", para el botón "← Volver"
+let ultimaVistaPrincipal = null; // 'comercial' | 'kickoff' | 'consultoria' — desde dónde se llegó a "historial", para el botón "← Volver"
 let listaClientesCache = []; // clientes de apiGetClientesConResumen, para filtrar el buscador sin volver a pedirlos al servidor
+let listaClientesKickoffCache = []; // misma lista de clientes, cacheada por separado para el buscador de Kick Off
+let herramientasCache = null; // catálogo de la Biblioteca de Magia, se pide una sola vez al servidor
+let stKickoff = { clienteId: null, cliente: null }; // estado del cliente activo en la pestaña Kick Off (independiente de `st`, que es de Consultoría)
+
+/**
+ * Banco de Preguntas Orientadoras del Kick Off (sección 1 del ajuste de flujo).
+ * Contenido verbatim entregado por el equipo COE — no es un cuestionario que se
+ * diligencia en la app: es una guía de referencia que el COE consulta durante la
+ * sesión y adapta con sus propias palabras (ver `aviso`, mostrado siempre arriba
+ * del listado). No alimenta ningún formulario ni se envía al servidor.
+ */
+const PREGUNTAS_ORIENTADORAS = {
+  aviso: 'Las preguntas no deben ser un cuestionario genérico. Deben servir como guía para que el COE conduzca la conversación. El COE puede utilizarlas como guía y hacer las preguntas con sus propias palabras.',
+  alineacion: {
+    titulo: 'Alineación Estratégica y Alineación Operativa',
+    preguntas: [
+      '¿Qué situaciones o problemas están intentando resolver actualmente?',
+      '¿Quién será el responsable principal del proyecto?',
+      '¿Quiénes serán los usuarios administradores de Buk?',
+      '¿Quiénes deben participar en las decisiones?',
+      '¿Qué disponibilidad tienen para las sesiones?',
+      '¿Qué actividades realizan manualmente?',
+      '¿Dónde sienten que pierden más tiempo?',
+      '¿Qué esperan centralizar?',
+      '¿Qué proceso debería funcionar significativamente mejor después de la implementación?',
+      '¿El problema está relacionado con falta de automatización, falta de definición del proceso, falta de información o falta de responsables?',
+      '¿Qué decisiones necesitan validación de otras áreas?',
+      '¿Hay alguien que deba aprobar antes de avanzar?',
+      '¿Qué pasa si el responsable principal no puede asistir? ¿Existe un respaldo?',
+      '¿Qué problema necesitan resolver primero?',
+      '¿Existe algún proceso que tenga una fecha límite?',
+      '¿Hay algún proceso que actualmente esté generando mayor impacto?',
+      '¿Qué módulo tiene mayor cantidad de usuarios involucrados?',
+      '¿Qué módulo genera mayor dependencia de procesos manuales?',
+      '¿La información necesaria ya está disponible? ¿Está consolidada o debemos construirla?',
+      '¿Quién será responsable de entregarla?',
+      '¿Cuánto tiempo necesitan para revisar y validar configuraciones?',
+      '¿Qué tan rápido pueden tomar decisiones?',
+      '¿Qué creen ustedes que podría hacer que esta implementación se retrase?'
+    ]
+  },
+  resumenEstrategico: {
+    titulo: 'Resumen Estratégico',
+    preguntas: [
+      'Priorización del Impacto Operativo: ¿Qué proceso actual genera la mayor pérdida de tiempo o cuello de botella, y cuál debe ser el primer resultado exitoso de la implementación?',
+      'Diagnóstico de la Causa Raíz: ¿El problema principal que buscan resolver se debe a una falta de automatización, falta de datos centralizados o a un proceso formalmente no definido?',
+      'Modelo de Gobernanza y Decisión: ¿Quiénes conforman el equipo clave de decisión y administración de Buk, y cuál es el protocolo de avance si un líder principal no está disponible?',
+      'Madurez y Calidad de la Información: ¿La información necesaria para parametrizar la plataforma ya existe de forma consolidada o requiere un trabajo previo de construcción y validación?',
+      'Capacidad de Carga y Dedicación: ¿Qué disponibilidad real de tiempo tiene el equipo para las sesiones de trabajo y la posterior revisión/validación de configuraciones?',
+      'Cadena de Aprobaciones Internas: ¿Qué decisiones o configuraciones críticas requieren la validación/aprobación previa de otras áreas (como Finanzas, TI o Legal) antes de avanzar?',
+      'Gestión de Riesgos y Fechas Críticas: ¿Existen fechas límite operativas no negociables o posibles riesgos internos que consideren que podrían retrasar el proyecto?',
+      'Equipo de Implementación: ¿Quiénes son las personas que van a realizar el proceso de implementación (nombre, teléfono y correo)?'
+    ]
+  },
+  modulos: [
+    {
+      nombre: 'Beneficios',
+      preguntas: [
+        'Cuéntame cómo funciona hoy este proceso desde que inicia hasta que termina, quién participa, qué herramientas utilizan y qué ocurre cuando algo se sale del flujo normal.',
+        '¿Qué beneficios ofrecen actualmente a sus colaboradores y cuáles quieren implementar en Buk? Indicar, si es posible, cuáles son prioritarios para la primera etapa.',
+        '¿Cómo gestionan actualmente cada uno de estos beneficios y qué dificultades tienen con la forma en que los administran hoy? (Manual, Excel, otra plataforma, correo, etc.)',
+        '¿Qué colaboradores pueden acceder a cada beneficio y qué condiciones deben cumplir? Por ejemplo: cargo, área, sede, antigüedad, tipo de contrato u otras condiciones.',
+        '¿Existen beneficios con diferentes condiciones, coberturas, valores o reglas dependiendo del grupo de colaboradores? ¿Cuáles?',
+        '¿Qué información debe proporcionar o qué documentos debe adjuntar el colaborador para acceder a cada beneficio?',
+        '¿Qué beneficios requieren aprobación y quién debe aprobarlos? ¿El responsable cambia dependiendo del beneficio, área o tipo de solicitud?',
+        '¿Los beneficios tienen fechas de vigencia, periodicidad, límites de uso o condiciones de renovación que debamos configurar?',
+        '¿Hay beneficios que requieran generar certificados, constancias u otros documentos? Si es así, ¿qué documento necesitan y qué información debe contener?',
+        '¿Qué información, imágenes, descripciones, condiciones, documentos o enlaces ya tienen disponibles para cargar cada beneficio en Buk?',
+        '¿Qué esperan mejorar con el módulo de Beneficios y qué resultado les indicaría que la implementación fue exitosa?',
+        '¿Qué información o reportes necesitan consultar sobre los beneficios, solicitudes y uso por parte de los colaboradores?',
+        '¿Existe algún beneficio o regla particular de su operación que debamos conocer antes de definir la configuración?'
+      ]
+    },
+    {
+      nombre: 'Encuestas',
+      preguntas: [
+        '¿Qué encuestas realizan actualmente y cuáles quieren implementar en Buk? Por ejemplo: clima, satisfacción, pulso, cultura, experiencia del colaborador, etc. Indicar cuáles son prioritarias.',
+        '¿Cómo gestionan actualmente estas encuestas y qué dificultades o necesidades quieren resolver con Buk? (Manual, Excel, otra plataforma, formularios, etc.)',
+        '¿Qué quieren medir con cada encuesta y qué esperan lograr o decidir a partir de sus resultados?',
+        '¿A quiénes estará dirigida cada encuesta y cómo necesitan segmentar a los participantes? (Por área, sede, cargo, antigüedad, población específica, etc.)',
+        '¿Qué nivel de anonimato o confidencialidad necesitan y quiénes deberían tener acceso a los resultados?',
+        '¿Con qué frecuencia quieren realizar cada encuesta y cuáles necesitan lanzar primero? (Única, mensual, trimestral, anual, periódica, etc.)',
+        '¿Ya tienen definida la metodología y las preguntas que utilizarán o esperan construirlas durante la implementación? Incluir escalas, tipos de respuesta y preguntas obligatorias si ya están definidas.',
+        '¿Quiénes participarán en el diseño, revisión, publicación y análisis de las encuestas?',
+        '¿Cómo quieren utilizar los resultados una vez finalizada la encuesta y qué información necesitan visualizar o reportar?',
+        'Si quisieran lanzar su primera encuesta inmediatamente después de la implementación, ¿cuál sería, a quién estaría dirigida y ya cuentan con las preguntas y demás información necesaria para configurarla?'
+      ]
+    },
+    {
+      nombre: 'Desempeño',
+      preguntas: [
+        '¿La evaluación está ligada a compensación (bono, aumento) o únicamente a desarrollo?',
+        '¿Con qué periodicidad realizan (o planean realizar) las evaluaciones de desempeño (semestral, anual)?',
+        '¿La organización ya tiene un diccionario de competencias construido, o hay que construirlo desde cero durante la implementación?',
+        '¿Prefieren evaluar por comportamientos concretos (indicadores conductuales) o por niveles de experiencia/seniority (niveles de desarrollo)?',
+        '¿Manejan competencias transversales (ejemplo: valores corporativos que aplican a todos) y específicas (por cargo/área), o solo un tipo?',
+        'Con los cargos que tienes actualmente, ¿es viable agruparlos por familia de cargo o cada uno necesita una configuración distinta de competencias?',
+        '¿Ya tienen definido cuántas competencias le corresponden a cada cargo y qué peso (%) tiene cada una?',
+        'Si manejan niveles de desarrollo: ¿ya está definido el nivel (junior/senior, etc.) de cada colaborador o hay que levantarlo?',
+        '¿Tienen una escala de evaluación definida hoy (numérica, conceptual, letras)? Si sí, ¿cuál es exactamente?',
+        '¿Manejan objetivos individuales, de equipo, o ambos? ¿En cascada (empresa → área → individuo) o independientes por líder?',
+        '¿Tienen fecha específica de inicio del ciclo de objetivos (ej. "primer semestre 2026")? Esto define el cronograma de configuración.',
+        '¿Qué combinación de evaluación quieren: 90° (solo autoevaluación), 180° (jefe + colaborador), 270° (+ pares), 360° (+ subalternos)?',
+        '¿El proceso de evaluación pasa hoy por un comité o líder que ajusta/calibra notas antes de comunicarlas? ¿Quién tiene esa autoridad?',
+        'En el proceso de evaluación del líder a su colaborador, ¿les gustaría que existiera la posibilidad de que el líder le deje feedback al colaborador?',
+        '¿Van a usar la Nine Box desde la primera evaluación, o es una fase posterior?'
+      ]
+    },
+    {
+      nombre: 'Onboarding',
+      preguntas: [
+        '¿Cómo es el proceso de inducción en la organización y cuántas etapas tienen?',
+        '¿Cómo es el proceso de preingreso hoy en día y qué documentos solicitan al candidato?',
+        '¿Cómo manejan hoy la coordinación con las áreas internas (tecnología, logística, SST) para preparar el ingreso del nuevo colaborador?',
+        '¿Requieren una plantilla general de onboarding para toda la compañía, o plantillas diferenciadas por área, cargo o rol?',
+        '¿A qué áreas internas (tecnología, logística, seguridad, etc.) deben notificarse para preparar equipos o accesos antes del primer día?',
+        '¿Qué correos automáticos desean enviar durante el proceso (bienvenida, recordatorios, instrucciones) y en qué momentos (antes/después del ingreso)?',
+        '¿Qué tareas debe completar el nuevo colaborador durante su proceso de onboarding (capacitaciones, lecturas, formularios)?',
+        '¿Qué tareas deben ejecutar las áreas internas antes o después del ingreso (crear usuario, asignar equipo, agendar inducción)?',
+        '¿Cuentan hoy con el módulo de Workflow para personalizar la plantilla de alta, o usarían la predeterminada del sistema?'
+      ]
+    },
+    {
+      nombre: 'Selección',
+      preguntas: [
+        '¿Tienen un manual de marca corporativo con paleta de colores, tipografías e imágenes y/o videos autorizadas desde el área de marketing?',
+        '¿Cuáles son los canales oficiales (LinkedIn, El Empleo, Computrabajo, entre otros) donde actualmente difunden sus ofertas laborales?',
+        '¿Actualmente tienen diferenciado el flujo o etapas de un proceso de selección según el tipo de cargo o ejecutan el mismo proceso para todas las vacantes? Si responde Sí: ¿Cuál es el flujo actual?',
+        '¿Qué datos o información son estrictamente necesarios en el formulario de aplicación a sus procesos de selección?',
+        '¿Cuáles son las competencias o/y valores corporativos que miden en las entrevistas y cómo las califican?',
+        '¿Utilizan proveedores externos de pruebas o requieren crear formularios/evaluaciones técnicas y/o de conocimiento dentro de Buk?',
+        '¿Manejan formatos de cartas oferta según el cargo del colaborador o tienen una genérica que les aplica a todos los perfiles? Si responden Sí: Enviar el formato.',
+        '¿Qué correos envían actualmente a los candidatos (avance de etapa, agendamiento de pruebas, citación a entrevista, descarte) y cuál es el tono de comunicación?',
+        '¿Cómo quieren que sea la primera impresión de un candidato al entrar a su portal de vacantes y qué información estratégica necesitan que sea visible desde el primer clic?',
+        '"Al publicar una oferta laboral, ¿qué información clave quieren que vea el candidato para que identifique si le interesa la posición y cumple con el perfil?"',
+        '¿Actualmente tienen una política de confidencialidad de datos para los candidatos? Si responden Sí: Enviar la política.',
+        '¿Cuál es la posición que buscan con mayor frecuencia o de manera continua a lo largo del año?'
+      ]
+    },
+    {
+      nombre: 'Canal de Denuncias',
+      preguntas: [
+        '¿Cuáles son las conductas éticas o faltas específicas que la empresa necesita priorizar o tipificar dentro del canal (ej. acoso laboral, acoso sexual, fraude, conflicto de interés)?',
+        '¿Tienen definida la política sobre en qué tipos de denuncia se permitirá el anonimato total y en cuáles exigirán datos de contacto de forma obligatoria?',
+        '¿Cómo manejan actualmente la línea de comunicación con el denunciante?',
+        '¿Quiénes integran el Comité de Ética o Comité de Convivencia Laboral que deben tener visibilidad de las denuncias recibidas?'
+      ]
+    },
+    {
+      nombre: 'Workflows',
+      preguntas: [
+        {
+          texto: '¿Actualmente cuentan con un formato de levantamiento de perfil donde se indiquen los datos que se necesitan cuando alguien solicita una vacante al reclutador? (Por ejemplo: nombre de la vacante, requerimientos del cargo, descripción de la vacante, nivel de urgencia).',
+          sub: [
+            'Si la respuesta es Sí: ¿Nos pueden compartir ese formato o plantilla?',
+            'Si la respuesta es No: ¿Qué datos les gustaría capturar en ese formato para la creación de la vacante?'
+          ]
+        },
+        'Cuéntenos cómo es el flujo actual de solicitud de una vacante, paso a paso. Si no tienen un flujo definido hoy, ¿cómo les gustaría que funcionara? (Por ejemplo: ¿el requerimiento lo hace el líder del área?, ¿pasa luego por la aprobación del director de Recursos Humanos?, ¿el director aprueba y lo pasa directamente al reclutador?).',
+        '¿Cuántas personas deben aprobar ese flujo actualmente?',
+        '¿Cómo gestionan hoy estas solicitudes? (Correo, Excel, WhatsApp, alguna herramienta puntual, etc.)',
+        '¿Hay otros procesos, además de la solicitud de vacantes, que también les gustaría automatizar con workflows?'
+      ]
+    },
+    {
+      nombre: 'Comunicación y Reconocimiento',
+      preguntas: [
+        '¿Tienen un manual de marca corporativo con paleta de colores, tipografías e imágenes y/o videos autorizadas desde el área de marketing?',
+        '¿Cómo manejan actualmente las comunicaciones internas y los reconocimientos a colaboradores?',
+        '¿Qué canales y qué tipo de comunicaciones tienen actualmente para los colaboradores? (Por ejemplo: correo, intranet, carteleras físicas, WhatsApp, Slack, etc.)',
+        '¿Han utilizado piezas gráficas o imágenes en sus comunicaciones anteriormente? Cuéntenos qué tipo de piezas manejan hoy y qué más les gustaría poder hacer.',
+        '¿Cuentan con plantillas de correo para cumpleaños y/o aniversarios? (Si dentro de estas fechas especiales realizan envío personalizado, ¿qué les gustaría incluir en la plantilla?). ¿Cómo manejan actualmente esta parte?',
+        {
+          texto: '¿Actualmente manejan el tema de reconocimientos?',
+          sub: [
+            'Si Sí: ¿Qué tipo de reconocimientos tienen?',
+            'Si No: ¿Cuáles son los valores corporativos que destaca la empresa, con los que les gustaría reconocer a las personas?'
+          ]
+        }
+      ]
+    }
+  ]
+};
 
 let st = {
   cliente: {},
@@ -36,17 +224,56 @@ let st = {
 
 document.addEventListener('DOMContentLoaded', function () {
   renderNavComercial(1);
+  inicializarTogglesSiNo();
+  const campoFecha = document.getElementById('f_fecha_diligenciamiento');
+  if (campoFecha) campoFecha.value = new Date().toLocaleDateString('es-CO');
   llamarServidor('apiGetModulos').then(function (modulos) {
     st.modulos = modulos;
     renderModulosCard();
   }).catch(mostrarErrorFatal);
+  renderJourney('journeyLanding', {});
 });
 
-// Cierra el dropdown de sugerencias del buscador de clientes si se hace clic afuera.
+// ------------------------- Toggles Sí/No (Paso 1 y Paso 3) -------------------------
+// Componente liviano reutilizable: cada contenedor .toggle-si-no trae su propio
+// data-campo, y el valor elegido se guarda en st.toggles[campo] (no en el DOM),
+// para que sobreviva si el usuario navega entre pasos con "← Atrás".
+
+function inicializarTogglesSiNo() {
+  document.querySelectorAll('.toggle-si-no').forEach(function (cont) {
+    const campo = cont.dataset.campo;
+    cont.innerHTML = ['Sí', 'No'].map(function (v) {
+      return '<button type="button" class="toggle-opt" onclick="setToggleSiNo(\'' + campo + '\',\'' + v + '\')">' + v + '</button>';
+    }).join('');
+  });
+}
+
+function setToggleSiNo(campo, valor) {
+  st.toggles = st.toggles || {};
+  st.toggles[campo] = valor;
+  const cont = document.querySelector('.toggle-si-no[data-campo="' + campo + '"]');
+  if (cont) {
+    Array.prototype.forEach.call(cont.querySelectorAll('.toggle-opt'), function (btn) {
+      btn.classList.toggle('activo', btn.textContent === valor);
+    });
+  }
+  if (campo === 'f_otra_plataforma') {
+    document.getElementById('wrap_otra_plataforma_cual').classList.toggle('hidden', valor !== 'Sí');
+  }
+}
+
+function valorToggle(campo) { return (st.toggles && st.toggles[campo]) || ''; }
+
+// Cierra el dropdown de sugerencias del buscador de clientes si se hace clic afuera
+// (aplica a los dos buscadores: Consultoría y Kick Off).
 document.addEventListener('click', function (e) {
   const wrap = document.getElementById('buscadorClienteWrap');
   const sugerencias = document.getElementById('sugerenciasClientes');
   if (wrap && sugerencias && !wrap.contains(e.target)) sugerencias.classList.add('hidden');
+
+  const wrapKo = document.getElementById('buscadorClienteKickoffWrap');
+  const sugerenciasKo = document.getElementById('sugerenciasClientesKickoff');
+  if (wrapKo && sugerenciasKo && !wrapKo.contains(e.target)) sugerenciasKo.classList.add('hidden');
 });
 
 // --------------------------- Infraestructura de llamadas ---------------------------
@@ -107,16 +334,76 @@ function manejarErrorInesperado_(e) {
 // ------------------------------- Vistas principales --------------------------------
 
 function mostrarVista(nombre) {
-  nombre = nombre || 'landing'; // pantalla de inicio: encabezado + las dos tarjetas grandes, nada de formulario
-  ['landing', 'comercial', 'consultoria', 'historial'].forEach(function (v) {
+  nombre = nombre || 'landing'; // pantalla de inicio: encabezado + las tarjetas grandes, nada de formulario
+  ['landing', 'comercial', 'kickoff', 'consultoria', 'historial'].forEach(function (v) {
     document.getElementById('vista-' + v).classList.toggle('hidden', v !== nombre);
   });
-  if (nombre === 'comercial' || nombre === 'consultoria') ultimaVistaPrincipal = nombre;
+  if (nombre === 'comercial' || nombre === 'kickoff' || nombre === 'consultoria') ultimaVistaPrincipal = nombre;
   document.getElementById('tabBtn-comercial').classList.toggle('activo', nombre === 'comercial');
+  document.getElementById('tabBtn-kickoff').classList.toggle('activo', nombre === 'kickoff');
   document.getElementById('tabBtn-consultoria').classList.toggle('activo', nombre === 'consultoria');
 
+  if (nombre === 'kickoff' && !stKickoff.clienteId) refrescarListaClientesKickoff();
   if (nombre === 'consultoria' && !st.clienteId) refrescarListaClientes();
   if (nombre === 'historial') cargarHistorial();
+}
+
+// ------------------------------- Journey / stepper del proceso -------------------------------
+
+const JOURNEY_ETAPAS = [
+  { id: 'diagnostico', icono: '🧭', titulo: 'Diagnóstico', responsable: 'Account Executive' },
+  { id: 'kickoff', icono: '🚀', titulo: 'Kick Off COE', responsable: 'COE T&C' },
+  { id: 'consultoria', icono: '📋', titulo: 'Consultoría', responsable: 'COE T&C' },
+  { id: 'implementacion', icono: '💛', titulo: 'Crear lugares de trabajo más felices', responsable: '' }
+];
+
+/**
+ * Dibuja el stepper visual Diagnóstico -> Kick Off COE -> Consultoría -> Crear lugares
+ * de trabajo más felices, con el responsable de cada etapa debajo del nombre.
+ * `estado` es un objeto { diagnostico: 'hecho'|'actual'|'futuro', kickoff: ..., consultoria: ..., implementacion: ... }.
+ * Si se omite una etapa, se calcula un estado por defecto según cuántas etapas anteriores están "hecho".
+ */
+function renderJourney(contenedorId, estado) {
+  const cont = document.getElementById(contenedorId);
+  if (!cont) return;
+  estado = estado || {};
+  let huboActual = false;
+  const estadosFinales = JOURNEY_ETAPAS.map(function (e) {
+    let s = estado[e.id];
+    if (!s) { s = huboActual ? 'futuro' : 'actual'; }
+    if (s === 'actual') huboActual = true;
+    return s;
+  });
+
+  const textos = {
+    diagnostico: { hecho: 'Completado', actual: 'En curso', futuro: 'Aún no empieza' },
+    kickoff: { hecho: 'Registrado', actual: 'Pendiente de registrar', futuro: 'Después del diagnóstico' },
+    consultoria: { hecho: 'Generada', actual: 'Lista para generar', futuro: 'Después del Kick Off' },
+    implementacion: { hecho: '', actual: '', futuro: '' }
+  };
+
+  cont.innerHTML = JOURNEY_ETAPAS.map(function (e, i) {
+    const s = estadosFinales[i];
+    const nodo = s === 'hecho' ? '✓' : e.icono;
+    return '<div class="journey-paso ' + s + '"><div class="journey-linea"></div>' +
+      '<div class="journey-nodo">' + nodo + '</div>' +
+      '<div class="journey-titulo">' + e.titulo + '</div>' +
+      (e.responsable ? '<div class="journey-responsable">' + e.responsable + '</div>' : '') +
+      '<div class="journey-estado">' + (textos[e.id][s] || '') + '</div></div>';
+  }).join('');
+}
+
+/** Calcula el estado del journey para un cliente puntual, a partir de lo que ya se sabe de él en `st`/`stKickoff`. */
+function estadoJourneyParaCliente_(diagnosticado, tieneKickoff, consultorias) {
+  const estado = {};
+  estado.diagnostico = diagnosticado ? 'hecho' : 'actual';
+  if (!diagnosticado) { estado.kickoff = 'futuro'; estado.consultoria = 'futuro'; estado.implementacion = 'futuro'; return estado; }
+  estado.kickoff = tieneKickoff ? 'hecho' : 'actual';
+  const hayConsultorias = consultorias && consultorias.length > 0;
+  const todasEntregadas = hayConsultorias && consultorias.every(function (c) { return c.estado === 'Entregada'; });
+  estado.consultoria = todasEntregadas ? 'hecho' : (hayConsultorias ? 'actual' : (tieneKickoff ? 'actual' : 'futuro'));
+  estado.implementacion = todasEntregadas ? 'actual' : 'futuro';
+  return estado;
 }
 
 // -------------------------------- Navegación de pasos -----------------------------------
@@ -147,13 +434,58 @@ function irAPaso(n) {
   if (n === 9) renderEntregable();
 }
 
+/**
+ * Historial consolidado: una fila por cliente, con acceso directo de descarga a
+ * los 3 documentos que la app genera para ese cliente — Diagnóstico Comercial,
+ * Consultoría (último entregable ya generado) y Radiografía — todo centralizado.
+ */
 function cargarHistorial() {
   llamarServidor('apiGetHistorial').then(function (filas) {
+    document.getElementById('resultadoDiagnosticoComercialHistorial').innerHTML = '';
     document.getElementById('filasHistorial').innerHTML = filas.map(function (f) {
-      return '<tr><td>' + formatearFecha(f.fecha) + '</td><td>' + f.cliente + '</td><td>' + f.modulo +
-        '</td><td>v' + f.version + '</td><td>' + f.estado + '</td></tr>';
+      const colDiagnostico = f.tieneDiagnostico
+        ? '<button class="icon-btn" title="Descargar Diagnóstico Comercial (PDF)" onclick="descargarDiagnosticoComercial(\'' + f.id + '\')">⬇</button>'
+        : '<span class="hint">—</span>';
+      const colConsultoria = f.entregableUrl
+        ? '<a class="icon-btn" title="Descargar Consultoría (PDF)" href="' + f.entregableUrl + '" target="_blank" rel="noopener">⬇</a>'
+        : '<span class="hint">—</span>';
+      const colRadiografia = f.tieneRadiografia
+        ? '<button class="icon-btn" title="Descargar Radiografía (PDF)" onclick="descargarRadiografia(\'' + f.id + '\')">⬇</button>'
+        : '<span class="hint">—</span>';
+      return '<tr><td>' + escapar(f.nombre) + '</td><td>' + escapar(f.tipoProyecto || '—') + '</td>' +
+        '<td>' + colDiagnostico + '</td>' +
+        '<td>' + colConsultoria + '</td>' +
+        '<td>' + colRadiografia + '</td></tr>';
     }).join('') || '<tr><td colspan="5">Sin registros aún.</td></tr>';
   }).catch(manejarErrorInesperado_);
+}
+
+/** Columna "Diagnóstico Comercial" del Historial: genera y muestra el link al PDF. */
+function descargarDiagnosticoComercial(clienteId) {
+  const cont = document.getElementById('resultadoDiagnosticoComercialHistorial');
+  if (cont) cont.innerHTML = '<p class="hint">Generando el Diagnóstico Comercial en PDF…</p>';
+  llamarServidor('apiGenerarDiagnosticoComercialPDF', clienteId).then(function (url) {
+    if (cont) cont.innerHTML = '<div class="tarjeta-resumen"><h3>Diagnóstico Comercial en PDF listo</h3>' +
+      '<p><a href="' + url + '" target="_blank">' + url + '</a></p></div>';
+    mostrarToast('Diagnóstico Comercial generado.', 'exito');
+  }).catch(function (e) {
+    if (cont) cont.innerHTML = '';
+    manejarErrorInesperado_(e);
+  });
+}
+
+/** Columna "Radiografía" del Historial: genera y muestra el link al PDF (misma función que usa Kick Off). */
+function descargarRadiografia(clienteId) {
+  const cont = document.getElementById('resultadoDiagnosticoComercialHistorial');
+  if (cont) cont.innerHTML = '<p class="hint">Generando la Radiografía en PDF…</p>';
+  llamarServidor('apiGenerarRadiografiaPDF', clienteId).then(function (url) {
+    if (cont) cont.innerHTML = '<div class="tarjeta-resumen"><h3>Radiografía en PDF lista</h3>' +
+      '<p><a href="' + url + '" target="_blank">' + url + '</a></p></div>';
+    mostrarToast('Radiografía generada.', 'exito');
+  }).catch(function (e) {
+    if (cont) cont.innerHTML = '';
+    manejarErrorInesperado_(e);
+  });
 }
 
 function formatearFecha(f) { try { return new Date(f).toLocaleString('es-CO'); } catch (e) { return f; } }
@@ -161,16 +493,33 @@ function formatearFecha(f) { try { return new Date(f).toLocaleString('es-CO'); }
 // ------------------------------ Paso 1: Comercial -------------------------------
 
 function irAPaso2() {
-  const campos = ['nombre','pais','industria','categoria','colaboradores','tamano'];
+  const campos = ['tipo_proyecto','account_manager','nombre','pais','industria','categoria','tamano','cultura'];
   const faltan = campos.filter(function (c) { return !document.getElementById('f_' + c).value; });
   if (faltan.length) { mostrarToast('Completa los campos obligatorios (*) antes de continuar.', 'error'); return; }
 
   st.cliente = {
-    nombre: val('f_nombre'), pais: val('f_pais'), url: val('f_url'), industria: val('f_industria'),
-    categoria: val('f_categoria'), colaboradores: Number(val('f_colaboradores')), tamano: val('f_tamano'),
-    contextoComercial: val('f_contexto'), objetivos: val('f_objetivos'),
-    doloresIniciales: val('f_dolores'), infoAdicional: val('f_info'),
-    modulosContratados: st.cliente.modulosContratados || []
+    tipoProyecto: val('f_tipo_proyecto'),
+    accountManager: val('f_account_manager'),
+    aeAcompanaKickoff: valorToggle('f_ae_kickoff'),
+    nombre: val('f_nombre'), pais: val('f_pais'), url: val('f_url'),
+    dominioCliente: val('f_dominio_cliente'),
+    liderNombre: val('f_lider_nombre'), liderCelular: val('f_lider_celular'), liderCorreo: val('f_lider_correo'),
+    liderEstrategicoNombre: val('f_lider_estrategico_nombre'),
+    liderEstrategicoCelular: val('f_lider_estrategico_celular'),
+    liderEstrategicoCorreo: val('f_lider_estrategico_correo'),
+    industria: val('f_industria'), categoria: val('f_categoria'), tamano: val('f_tamano'),
+    sedesUbicacion: val('f_sedes'),
+    usabaOtraPlataforma: valorToggle('f_otra_plataforma'),
+    otraPlataformaCual: val('f_otra_plataforma_cual'),
+    objetivosYDolores: val('f_objetivos_dolores'),
+    motivoCompraBuk: val('f_motivo_buk'),
+    culturaFrase: val('f_cultura'),
+    sesionesGrupales: valorToggle('f_sesiones_grupales'),
+    estructuraEquipo: val('f_estructura_equipo'),
+    infoAdicional: val('f_info'),
+    contextoComercial: val('f_contexto'),
+    modulosContratados: st.cliente.modulosContratados || [],
+    observacionesModulos: st.cliente.observacionesModulos || {}
   };
   irAPaso(2);
 }
@@ -186,6 +535,8 @@ function renderModulosCard() {
       '<input type="checkbox" id="chk_' + m.id + '" onclick="event.stopPropagation(); toggleModulo(\'' + m.modulo + '\',\'' + m.id + '\')">' +
       '<div><div class="titulo">' + m.modulo + '</div><div class="desc">' + (m.descripcion || '') + '</div></div></div>';
   }).join('') || '<p class="alerta-error">No hay módulos activos configurados en la hoja MODULOS.</p>';
+  renderObservacionesModulos();
+  renderModuloInicioOptions();
 }
 
 function toggleModulo(nombreModulo, id) {
@@ -196,6 +547,40 @@ function toggleModulo(nombreModulo, id) {
 
   document.getElementById('card_' + id).classList.toggle('seleccionado', idx === -1);
   document.getElementById('chk_' + id).checked = idx === -1;
+  renderObservacionesModulos();
+  renderModuloInicioOptions();
+}
+
+/** Observaciones libres del comercial, una por cada módulo ya contratado — se actualizan
+ * en memoria en cada tecla (no se vuelve a pintar todo el bloque) para no perder el foco. */
+function renderObservacionesModulos() {
+  const cont = document.getElementById('observacionesModulos');
+  if (!cont) return;
+  const seleccionados = st.cliente.modulosContratados || [];
+  st.cliente.observacionesModulos = st.cliente.observacionesModulos || {};
+  if (!seleccionados.length) { cont.innerHTML = ''; return; }
+  cont.innerHTML = '<div class="subseccion-titulo">Observaciones por módulo</div>' + seleccionados.map(function (m) {
+    const valor = st.cliente.observacionesModulos[m] || '';
+    return '<label>' + escapar(m) +
+      '<textarea rows="2" placeholder="Notas del comercial sobre este módulo…" oninput="actualizarObservacionModulo(\'' +
+      escapar(m).replace(/'/g, "\\'") + '\', this.value)">' + escapar(valor) + '</textarea></label>';
+  }).join('');
+}
+
+function actualizarObservacionModulo(modulo, valor) {
+  st.cliente.observacionesModulos = st.cliente.observacionesModulos || {};
+  st.cliente.observacionesModulos[modulo] = valor;
+}
+
+/** El selector de "módulo de inicio deseado" solo debe ofrecer módulos ya contratados. */
+function renderModuloInicioOptions() {
+  const sel = document.getElementById('f_modulo_inicio');
+  if (!sel) return;
+  const actual = sel.value;
+  const seleccionados = st.cliente.modulosContratados || [];
+  sel.innerHTML = '<option value="">Selecciona…</option>' + seleccionados.map(function (m) {
+    return '<option' + (m === actual ? ' selected' : '') + '>' + escapar(m) + '</option>';
+  }).join('');
 }
 
 function avanzarModulos() {
@@ -203,6 +588,12 @@ function avanzarModulos() {
     mostrarToast('Selecciona al menos un módulo contratado.', 'error');
     return;
   }
+  st.cliente.integracionSso = document.getElementById('f_sso').checked;
+  st.cliente.integracionApi = document.getElementById('f_api').checked;
+  st.cliente.dominioCorreo = val('f_dominio_correo');
+  st.cliente.moduloInicioDeseado = val('f_modulo_inicio');
+  st.cliente.fechaFinEsperada = document.getElementById('f_fecha_fin').value;
+  st.cliente.comentariosTiempos = val('f_comentarios_tiempos');
   irAPaso(3);
 }
 
@@ -212,6 +603,7 @@ function guardarClienteYContinuar() {
   st.cliente.procesosActuales = val('f_procesos');
   st.cliente.herramientasUtilizadas = val('f_herramientas');
   st.cliente.nivelAutomatizacion = val('f_automatizacion');
+  st.cliente.usaHerramientasOfimaticas = valorToggle('f_ofimaticas');
 
   llamarServidor('apiGuardarCliente', st.cliente).then(function (registro) {
     if (!registro || !registro.id) {
@@ -355,14 +747,18 @@ function renderResumenDiagnostico() {
   const c = st.cliente;
 
   let html = '<div class="tarjeta-resumen contexto-general"><h3>Contexto general del cliente</h3><dl>' +
+    '<div><dt>Account Manager</dt><dd>' + (escapar(c.accountManager) || '—') + '</dd></div>' +
     '<div><dt>URL / Sitio web</dt><dd>' + (escapar(c.url) || '—') + '</dd></div>' +
-    '<div><dt>Contexto comercial</dt><dd>' + (escapar(c.contextoComercial) || '—') + '</dd></div>' +
-    '<div><dt>Objetivos</dt><dd>' + (escapar(c.objetivos) || '—') + '</dd></div>' +
-    '<div><dt>Dolores iniciales</dt><dd>' + (escapar(c.doloresIniciales) || '—') + '</dd></div>' +
+    '<div><dt>Cultura del cliente</dt><dd>' + (escapar(c.culturaFrase) || '—') + '</dd></div>' +
+    '<div><dt>Objetivos y dolores</dt><dd>' + (escapar(c.objetivosYDolores) || '—') + '</dd></div>' +
+    '<div><dt>Motivo de contratación de Buk</dt><dd>' + (escapar(c.motivoCompraBuk) || '—') + '</dd></div>' +
+    '<div><dt>Estructura del equipo de implementación</dt><dd>' + (escapar(c.estructuraEquipo) || '—') + '</dd></div>' +
     '<div><dt>Información adicional</dt><dd>' + (escapar(c.infoAdicional) || '—') + '</dd></div>' +
+    '<div><dt>Contexto comercial</dt><dd>' + (escapar(c.contextoComercial) || '—') + '</dd></div>' +
     '<div><dt>Procesos actuales</dt><dd>' + (escapar(c.procesosActuales) || '—') + '</dd></div>' +
     '<div><dt>Herramientas utilizadas</dt><dd>' + (escapar(c.herramientasUtilizadas) || '—') + '</dd></div>' +
     '<div><dt>Automatización percibida</dt><dd>' + (escapar(c.nivelAutomatizacion) || '—') + '</dd></div>' +
+    '<div><dt>¿Usan herramientas ofimáticas?</dt><dd>' + (escapar(c.usaHerramientasOfimaticas) || '—') + '</dd></div>' +
     '</dl></div>';
 
   html += st.diagnosticosPorModulo.map(function (d) {
@@ -413,6 +809,408 @@ function irAConsultoria() {
   st.moduloRevisionActivo = null;
   mostrarVista('consultoria');
   irAPaso(6);
+}
+
+/** Acceso a Consultoría desde Kick Off, una vez generada la Radiografía del cliente. */
+function irAConsultoriaDesdeKickoff() {
+  st.clienteId = stKickoff.clienteId;
+  st.cliente = stKickoff.cliente;
+  document.getElementById('selectorCliente').classList.add('hidden');
+  document.getElementById('subwizardConsultoria').classList.remove('hidden');
+  document.getElementById('nombreClienteActivo').textContent = st.cliente.nombre;
+  st.consultorias = [];
+  st.moduloRevisionActivo = null;
+  mostrarVista('consultoria');
+  irAPaso(6);
+}
+
+// ================== PESTAÑA "KICK OFF COE" ==================
+// Mismo patrón de buscador que la pestaña de Consultoría, pero con ids e
+// instancia de estado propios (stKickoff) para no interferir con `st`.
+
+function refrescarListaClientesKickoff() {
+  listaClientesKickoffCache = [];
+  document.getElementById('buscadorClienteKickoff').value = '';
+  document.getElementById('sugerenciasClientesKickoff').classList.add('hidden');
+  document.getElementById('sugerenciasClientesKickoff').innerHTML = '';
+  document.getElementById('previewClienteKickoff').classList.add('hidden');
+  document.getElementById('previewClienteKickoff').innerHTML = '';
+
+  llamarServidor('apiGetClientesConResumen').then(function (clientes) {
+    listaClientesKickoffCache = clientes || [];
+  }).catch(manejarErrorInesperado_);
+}
+
+/**
+ * Funciona como lista desplegable y buscador a la vez: al enfocar el campo vacío
+ * muestra la lista completa de clientes (los que ya tienen módulos diagnosticados
+ * en Diagnóstico Comercial aparecen primero), y al escribir la filtra por nombre.
+ */
+function filtrarClientesKickoff() {
+  const q = document.getElementById('buscadorClienteKickoff').value.trim().toLowerCase();
+  const cont = document.getElementById('sugerenciasClientesKickoff');
+
+  if (!listaClientesKickoffCache.length) {
+    cont.innerHTML = '<div class="sugerencia-vacia">Todavía no hay clientes cargados. Ve a "Diagnóstico Comercial" para registrar el primero.</div>';
+    cont.classList.remove('hidden');
+    return;
+  }
+
+  const base = q
+    ? listaClientesKickoffCache.filter(function (c) { return (c.nombre || '').toLowerCase().indexOf(q) !== -1; })
+    : listaClientesKickoffCache.slice();
+
+  base.sort(function (a, b) {
+    const da = (a.modulos_diagnosticados || []).length > 0 ? 1 : 0;
+    const db = (b.modulos_diagnosticados || []).length > 0 ? 1 : 0;
+    if (da !== db) return db - da;
+    return (a.nombre || '').localeCompare(b.nombre || '');
+  });
+
+  const resultados = base.slice(0, 30);
+  cont.innerHTML = resultados.length ? resultados.map(function (c) {
+    const nDiag = (c.modulos_diagnosticados || []).length;
+    const detalle = escapar(c.industria || '') + (nDiag > 0 ? ' · ' + nDiag + ' módulo(s) diagnosticado(s)' : ' · sin diagnóstico');
+    return '<div class="sugerencia-item" onclick="elegirSugerenciaClienteKickoff(\'' + c.id + '\')"><strong>' + escapar(c.nombre) + '</strong><span>' + detalle + '</span></div>';
+  }).join('') : '<div class="sugerencia-vacia">No se encontró ninguna empresa con ese nombre.</div>';
+  cont.classList.remove('hidden');
+}
+
+function elegirSugerenciaClienteKickoff(clienteId) {
+  const c = listaClientesKickoffCache.find(function (x) { return x.id === clienteId; });
+  document.getElementById('sugerenciasClientesKickoff').classList.add('hidden');
+  if (!c) return;
+  document.getElementById('buscadorClienteKickoff').value = c.nombre;
+  const diagnosticado = (c.modulos_diagnosticados || []).length > 0;
+  document.getElementById('previewClienteKickoff').innerHTML =
+    '<div class="tarjeta-resumen cliente-preview-card"><h3>' + escapar(c.nombre) + '</h3>' +
+    '<p class="hint" style="margin-top:6px">' + (diagnosticado ? (c.modulos_diagnosticados.length + ' módulo(s) ya diagnosticado(s).') : 'Este cliente todavía no tiene módulos diagnosticados — puedes registrar el Kick Off igual, pero se recomienda completar primero el Diagnóstico Comercial.') + '</p>' +
+    '<div class="step-actions" style="margin-top:14px"><button class="btn-primary" onclick="seleccionarClienteKickoff(\'' + c.id + '\')">Continuar →</button></div></div>';
+  document.getElementById('previewClienteKickoff').classList.remove('hidden');
+}
+
+function seleccionarClienteKickoff(clienteId) {
+  Promise.all([
+    llamarServidor('apiObtenerCliente', clienteId),
+    llamarServidor('apiObtenerDiagnosticosCliente', clienteId),
+    llamarServidor('apiObtenerRadiografiaCliente', clienteId),
+    llamarServidor('apiObtenerConsultoriasCliente', clienteId)
+  ]).then(function (resultados) {
+    const cliente = resultados[0], diagnosticos = resultados[1], radiografiaExistente = resultados[2], consultorias = resultados[3];
+    stKickoff.clienteId = cliente.id;
+    stKickoff.cliente = cliente;
+    stKickoff.notasUrl = radiografiaExistente ? (radiografiaExistente.notas_gemini_url || '') : '';
+
+    document.getElementById('selectorClienteKickoff').classList.add('hidden');
+    document.getElementById('subwizardKickoff').classList.remove('hidden');
+    document.getElementById('nombreClienteActivoKickoff').textContent = cliente.nombre;
+    document.getElementById('panelRadiografia').classList.add('hidden');
+
+    renderJourney('journeyKickoff', estadoJourneyParaCliente_((diagnosticos || []).length > 0, !!radiografiaExistente, consultorias));
+
+    if (radiografiaExistente) {
+      document.getElementById('rad_notas_texto').value = radiografiaExistente.notas_gemini || '';
+      renderRadiografia_(radiografiaExistente.radiografia);
+      document.getElementById('kickoffVacio').classList.add('hidden');
+    } else {
+      document.getElementById('rad_notas_texto').value = '';
+      document.getElementById('resultadoRadiografia').innerHTML = '';
+      document.getElementById('kickoffVacio').classList.remove('hidden');
+    }
+    onNotasRadiografiaCambiaron();
+  }).catch(manejarErrorInesperado_);
+}
+
+function cambiarClienteKickoff() {
+  document.getElementById('subwizardKickoff').classList.add('hidden');
+  document.getElementById('selectorClienteKickoff').classList.remove('hidden');
+  stKickoff.clienteId = null;
+  refrescarListaClientesKickoff();
+}
+
+// ---------------------- Radiografía del Cliente (dentro de Kick Off) ----------------------
+
+function toggleRadiografiaPanel() {
+  document.getElementById('panelRadiografia').classList.toggle('hidden');
+}
+
+function onNotasRadiografiaCambiaron() {
+  const notas = document.getElementById('rad_notas_texto').value.trim();
+  document.getElementById('btnGenerarRadiografia').disabled = !notas;
+}
+
+/** Botón "Traer notas": abre el Google Doc de la URL (notas de Gemini de Meet) y trae su texto. */
+function traerNotasDesdeUrl() {
+  const url = document.getElementById('rad_notas_url').value.trim();
+  if (!url) { mostrarToast('Pega la URL del documento de notas antes de continuar.', 'error'); return; }
+  document.getElementById('estadoNotasRadiografia').textContent = 'Trayendo notas del documento…';
+  llamarServidor('apiObtenerNotasDesdeUrl', url).then(function (resultado) {
+    document.getElementById('rad_notas_texto').value = resultado.texto;
+    document.getElementById('estadoNotasRadiografia').textContent = 'Notas traídas de "' + resultado.titulo + '".';
+    stKickoff.notasUrl = url;
+    onNotasRadiografiaCambiaron();
+    mostrarToast('Notas traídas correctamente.', 'exito');
+  }).catch(function (e) {
+    document.getElementById('estadoNotasRadiografia').textContent = '';
+    manejarErrorInesperado_(e);
+  });
+}
+
+/** Botón "🩻 Generar Radiografía": cruza Diagnóstico Comercial + Notas de Kick Off. */
+function generarRadiografiaCOE() {
+  const notas = document.getElementById('rad_notas_texto').value.trim();
+  if (!notas) { mostrarToast('Pega o trae las notas de la sesión antes de generar la Radiografía.', 'error'); return; }
+  if (!stKickoff.clienteId) { mostrarToast('Selecciona primero un cliente.', 'error'); return; }
+
+  document.getElementById('estadoRadiografia').innerHTML = '<p class="hint">Generando Radiografía — cruzando el Diagnóstico Comercial con las notas de Kick Off…</p>';
+  llamarServidor('apiGenerarRadiografia', stKickoff.clienteId, notas, stKickoff.notasUrl || '')
+    .then(function (resultado) {
+      document.getElementById('estadoRadiografia').innerHTML = '';
+      document.getElementById('kickoffVacio').classList.add('hidden');
+      renderRadiografia_(resultado.radiografia);
+      renderJourney('journeyKickoff', estadoJourneyParaCliente_(true, true, []));
+      mostrarToast('Radiografía generada — revísala antes de ir a Consultoría.', 'exito');
+    })
+    .catch(function (e) {
+      document.getElementById('estadoRadiografia').innerHTML = '';
+      manejarErrorInesperado_(e);
+    });
+}
+
+/** Pinta las 11 secciones de la Radiografía (sección 5 del pedido), más las alertas de inconsistencia. */
+function renderRadiografia_(r) {
+  const cont = document.getElementById('resultadoRadiografia');
+  if (!r) { cont.innerHTML = ''; return; }
+
+  const lista = function (arr) { return '<ul>' + (arr || []).map(function (x) { return '<li>' + escapar(x) + '</li>'; }).join('') + '</ul>' || '<p class="hint">—</p>'; };
+  const listaVacia = function (arr) { return (arr && arr.length) ? lista(arr) : '<p class="hint">Sin información.</p>'; };
+
+  let html = '<div class="tarjeta-resumen">';
+  html += '<div class="step-actions" style="margin:0 0 14px;justify-content:flex-end">' +
+    '<button class="btn-secondary" onclick="descargarRadiografiaPDF()">📄 Descargar PDF</button>' +
+    '<button class="btn-secondary" onclick="toggleRadiografiaPanel()">↻ Regenerar con nuevas notas</button>' +
+    '<button class="btn-generar" onclick="irAConsultoriaDesdeKickoff()">📋 Ir a Consultoría y Gestión de Entregables →</button></div>' +
+    '<div id="resultadoRadiografiaPDF"></div>';
+
+  if (r.alertas_inconsistencia && r.alertas_inconsistencia.length) {
+    html += '<div class="radiografia-seccion"><h4>⚠️ Alertas de inconsistencia</h4>' +
+      r.alertas_inconsistencia.map(function (a) { return '<div class="alerta-inconsistencia">⚠️ ' + escapar(a) + '</div>'; }).join('') + '</div>';
+  }
+
+  html += '<div class="radiografia-seccion"><h4>🏢 Contexto del cliente</h4><p>' + escapar(r.contexto_cliente || '—') + '</p></div>';
+  html += '<div class="radiografia-seccion"><h4>🎯 Necesidades principales</h4>' + listaVacia(r.necesidades_principales) + '</div>';
+  html += '<div class="radiografia-seccion"><h4>⚙️ Procesos actuales</h4>' + listaVacia(r.procesos_actuales) + '</div>';
+  html += '<div class="radiografia-seccion"><h4>🚀 Objetivos de implementación</h4>' + listaVacia(r.objetivos_implementacion) + '</div>';
+  html += '<div class="radiografia-seccion"><h4>🔎 Hallazgos del Kick Off</h4>' + listaVacia(r.hallazgos_kickoff) + '</div>';
+  html += '<div class="radiografia-seccion"><h4>⚠️ Riesgos</h4>' + listaVacia(r.riesgos) + '</div>';
+  html += '<div class="radiografia-seccion"><h4>📌 Definiciones tomadas</h4>' + listaVacia(r.definiciones_tomadas) + '</div>';
+  html += '<div class="radiografia-seccion"><h4>📥 Pendientes</h4>' + listaVacia(r.pendientes) + '</div>';
+  html += '<div class="radiografia-seccion"><h4>👥 Responsables</h4>' +
+    ((r.responsables && r.responsables.length) ? lista(r.responsables.map(function (p) { return (p.nombre || '—') + (p.rol ? ' — ' + p.rol : ''); })) : '<p class="hint">Sin información.</p>') + '</div>';
+  html += '<div class="radiografia-seccion"><h4>🧩 Configuraciones requeridas</h4>' + listaVacia(r.configuraciones_requeridas) + '</div>';
+
+  if (r.por_modulo) {
+    html += '<div class="radiografia-seccion"><h4>📦 Información por módulo</h4>';
+    Object.keys(r.por_modulo).forEach(function (m) {
+      const bloque = r.por_modulo[m];
+      if (!bloque || (!bloque.hallazgos.length && !bloque.decisiones.length && !bloque.pendientes.length)) return;
+      html += '<div class="radiografia-modulo-card"><h5>' + escapar(m) + '</h5>';
+      if (bloque.hallazgos.length) html += '<strong class="hint">Hallazgos</strong>' + lista(bloque.hallazgos);
+      if (bloque.decisiones.length) html += '<strong class="hint">Decisiones</strong>' + lista(bloque.decisiones);
+      if (bloque.pendientes.length) html += '<strong class="hint">Pendientes</strong>' + lista(bloque.pendientes);
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  html += '</div>';
+  cont.innerHTML = html;
+}
+
+/** Botón "📄 Descargar PDF" dentro de la Radiografía ya generada. */
+function descargarRadiografiaPDF() {
+  if (!stKickoff.clienteId) return;
+  const cont = document.getElementById('resultadoRadiografiaPDF');
+  if (cont) cont.innerHTML = '<p class="hint">Generando el PDF…</p>';
+  llamarServidor('apiGenerarRadiografiaPDF', stKickoff.clienteId).then(function (url) {
+    if (cont) cont.innerHTML = '<p class="hint">PDF listo: <a href="' + url + '" target="_blank">' + url + '</a></p>';
+    mostrarToast('Radiografía en PDF generada.', 'exito');
+  }).catch(function (e) {
+    if (cont) cont.innerHTML = '';
+    manejarErrorInesperado_(e);
+  });
+}
+
+// ---------------------- Preguntas Orientadoras (botón "💬" dentro de Kick Off) ----------------------
+// Guía de referencia estática (PREGUNTAS_ORIENTADORAS, arriba) — no captura datos ni
+// llama al servidor, solo se muestra/filtra en el navegador.
+
+function abrirPreguntasOrientadoras() {
+  document.getElementById('orientadorasBuscar').value = '';
+  document.getElementById('modalPreguntasOrientadoras').classList.remove('hidden');
+  renderPreguntasOrientadoras();
+}
+
+function cerrarPreguntasOrientadoras() {
+  document.getElementById('modalPreguntasOrientadoras').classList.add('hidden');
+}
+
+function renderPreguntasOrientadoras() {
+  const q = (document.getElementById('orientadorasBuscar').value || '').trim().toLowerCase();
+  const cont = document.getElementById('orientadorasLista');
+  const coincide = function (texto) { return !q || String(texto).toLowerCase().indexOf(q) !== -1; };
+  const preguntaCoincide = function (p) {
+    return (typeof p === 'string') ? coincide(p) : (coincide(p.texto) || (p.sub || []).some(coincide));
+  };
+  const pintarPregunta = function (p) {
+    if (typeof p === 'string') return '<li>' + escapar(p) + '</li>';
+    let li = '<li>' + escapar(p.texto);
+    if (p.sub && p.sub.length) li += '<ul>' + p.sub.map(function (s) { return '<li>' + escapar(s) + '</li>'; }).join('') + '</ul>';
+    return li + '</li>';
+  };
+
+  let html = '<div class="orientadoras-aviso">💡 ' + escapar(PREGUNTAS_ORIENTADORAS.aviso) + '</div>';
+  let algo = false;
+
+  const alineacionFiltradas = PREGUNTAS_ORIENTADORAS.alineacion.preguntas.filter(coincide);
+  if (alineacionFiltradas.length) {
+    algo = true;
+    html += '<div class="orientadoras-seccion"><h3>' + escapar(PREGUNTAS_ORIENTADORAS.alineacion.titulo) + '</h3><ul>' +
+      alineacionFiltradas.map(function (p) { return '<li>' + escapar(p) + '</li>'; }).join('') + '</ul></div>';
+  }
+
+  const resumenFiltradas = PREGUNTAS_ORIENTADORAS.resumenEstrategico.preguntas.filter(coincide);
+  if (resumenFiltradas.length) {
+    algo = true;
+    html += '<div class="orientadoras-seccion"><h3>' + escapar(PREGUNTAS_ORIENTADORAS.resumenEstrategico.titulo) + '</h3><ol>' +
+      resumenFiltradas.map(function (p) { return '<li>' + escapar(p) + '</li>'; }).join('') + '</ol></div>';
+  }
+
+  const modulosHtml = PREGUNTAS_ORIENTADORAS.modulos.map(function (m) {
+    const nombreCoincide = coincide(m.nombre);
+    const preguntas = nombreCoincide ? m.preguntas : m.preguntas.filter(preguntaCoincide);
+    if (!preguntas.length) return '';
+    return '<details class="orientadoras-modulo"' + (q ? ' open' : '') + '><summary>' + escapar(m.nombre) + '</summary><ul>' +
+      preguntas.map(pintarPregunta).join('') + '</ul></details>';
+  }).filter(Boolean).join('');
+
+  if (modulosHtml) {
+    algo = true;
+    html += '<div class="orientadoras-seccion"><h3>¡Check & Go! — Profundización por Módulo</h3></div>' + modulosHtml;
+  }
+
+  cont.innerHTML = algo ? html : (html + '<div class="orientadoras-vacio">No se encontró ninguna pregunta con ese término.</div>');
+}
+
+/**
+ * Resumen del Kick Off dentro de "Consultoría y Gestión de Entregables" (sección 3 del
+ * ajuste): la información registrada en Kick Off queda visible acá mismo, como parte
+ * del proceso, en lugar de quedar aislada en su propia pantalla.
+ */
+function renderResumenKickOff_(kickOff) {
+  if (!kickOff) {
+    return '<div class="kickoff-resumen-card sin-datos">Este cliente aún no tiene información de Kick Off registrada.</div>';
+  }
+  function lista(items) {
+    return (items && items.length) ? '<ul>' + items.map(function (i) { return '<li>' + escapar(i) + '</li>'; }).join('') + '</ul>' : '<p class="hint" style="margin:2px 0 0">Sin registrar.</p>';
+  }
+  return '<details class="kickoff-resumen-card">' +
+    '<summary>Información del Kick Off</summary>' +
+    '<div class="kickoff-resumen-cuerpo">' +
+    '<div class="kickoff-resumen-bloque"><h5>Contexto</h5><p>' + escapar(kickOff.contexto || 'Sin registrar.') + '</p></div>' +
+    '<div class="kickoff-resumen-bloque"><h5>Necesidades</h5>' + lista(kickOff.necesidades) + '</div>' +
+    '<div class="kickoff-resumen-bloque"><h5>Procesos</h5>' + lista(kickOff.procesos) + '</div>' +
+    '<div class="kickoff-resumen-bloque"><h5>Expectativas</h5>' + lista(kickOff.expectativas) + '</div>' +
+    '</div></details>';
+}
+
+// ================== BIBLIOTECA PLANTILLAS APPSCRIPTS ==================
+
+function abrirBibliotecaMagia() {
+  document.getElementById('modalMagia').classList.remove('hidden');
+  if (herramientasCache) { renderHerramientasMagia(); return; }
+  llamarServidor('apiGetHerramientas').then(function (herramientas) {
+    herramientasCache = herramientas || [];
+    const select = document.getElementById('magiaFiltroModulo');
+    const modulos = Array.from(new Set(herramientasCache.map(function (h) { return h.modulo; }))).sort();
+    select.innerHTML = '<option value="">Todos los módulos</option>' + modulos.map(function (m) { return '<option>' + escapar(m) + '</option>'; }).join('');
+    renderHerramientasMagia();
+  }).catch(manejarErrorInesperado_);
+}
+
+function cerrarBibliotecaMagia() { document.getElementById('modalMagia').classList.add('hidden'); }
+
+function renderHerramientasMagia() {
+  const cont = document.getElementById('magiaLista');
+  if (!herramientasCache) { cont.innerHTML = ''; return; }
+  const q = (document.getElementById('magiaBuscar').value || '').trim().toLowerCase();
+  const modulo = document.getElementById('magiaFiltroModulo').value;
+  const filtradas = herramientasCache.filter(function (h) {
+    return (!q || h.nombre.toLowerCase().indexOf(q) !== -1) && (!modulo || h.modulo === modulo);
+  });
+  cont.innerHTML = filtradas.map(tarjetaHerramientaHtml_).join('') ||
+    '<div class="modal-magia-vacio">✨ Ningún script coincide con la búsqueda todavía.</div>';
+}
+
+function tarjetaHerramientaHtml_(h) {
+  const disponible = h.estado === 'Disponible';
+  const badge = disponible ? '<span class="herr-badge disponible">Disponible</span>' : '<span class="herr-badge pendiente">Pendiente de link</span>';
+  const accion = disponible
+    ? '<a class="herr-abrir" href="' + h.url + '" target="_blank">Abrir script ↗</a>'
+    : '<span class="herr-abrir" style="color:var(--naranja)">Próximamente</span>';
+  return '<div class="herramienta-card"><div class="herr-cabecera"><span class="herr-titulo">' + escapar(h.nombre) + '</span>' + badge + '</div>' +
+    '<div class="herr-modulo">' + escapar(h.modulo) + (h.etapa ? ' · ' + escapar(h.etapa) : '') + '</div>' +
+    '<div class="herr-uso">' + escapar(h.uso_recomendado || 'Uso recomendado pendiente de documentar.') + '</div>' +
+    accion + '</div>';
+}
+
+/**
+ * Intenta "diligenciar de una vez" el script externo pasándole en la URL los
+ * datos del cliente que esta app ya tiene cargados (sector, tamaño, ciudad,
+ * su sitio web). Esto solo pre-llena el formulario del lado del script SI ese
+ * script (código externo, fuera de esta app, uno por cada AppScript de la
+ * Biblioteca) fue programado para leer esos parámetros con doGet(e) — no hay
+ * forma de garantizarlo desde acá porque no es código de este proyecto. Por
+ * eso, junto al botón también se muestran los mismos datos en texto plano,
+ * para copiarlos a mano si el script no los toma automáticamente.
+ */
+function construirUrlHerramientaConDatos_(url, cliente) {
+  if (!url || !cliente) return url;
+  const params = [];
+  const add = function (clave, valor) { if (valor) params.push(clave + '=' + encodeURIComponent(valor)); };
+  add('cliente', cliente.nombre);
+  add('sector', cliente.industria);
+  add('tamano', cliente.tamano);
+  add('ciudad', cliente.pais);
+  add('url', cliente.url);
+  if (!params.length) return url;
+  return url + (url.indexOf('?') === -1 ? '?' : '&') + params.join('&');
+}
+
+/** Scripts recomendados para un módulo puntual — usado dentro de la revisión de consultoría (sección 6 del rediseño). */
+function renderScriptsRecomendados_(modulo, cliente) {
+  if (!herramientasCache) {
+    llamarServidor('apiGetHerramientas').then(function (h) { herramientasCache = h || []; renderRevisionConsultoria(); }).catch(function () { herramientasCache = []; });
+    return '<div class="scripts-recomendados"><h4>📎 Scripts recomendados</h4><p class="hint">Cargando catálogo…</p></div>';
+  }
+  const delModulo = herramientasCache.filter(function (h) { return h.modulo === modulo; });
+  if (!delModulo.length) return '';
+
+  const datosCliente = [
+    cliente && cliente.industria ? 'Sector: ' + cliente.industria : '',
+    cliente && cliente.tamano ? 'Tamaño: ' + cliente.tamano : '',
+    cliente && cliente.pais ? 'Ciudad: ' + cliente.pais : '',
+    cliente && cliente.url ? 'URL: ' + cliente.url : ''
+  ].filter(Boolean).join(' · ');
+
+  return '<div class="scripts-recomendados"><h4>📎 Scripts recomendados para ' + escapar(modulo) + '</h4>' +
+    '<p class="hint">Detectados automáticamente porque el cliente tiene este módulo contratado. Si el script recibe estos datos, ya vienen precargados en el enlace; si no, cópialos de aquí.</p>' +
+    (datosCliente ? '<p class="scripts-datos-cliente">' + escapar(datosCliente) + '</p>' : '') +
+    '<div class="scripts-recomendados-lista">' + delModulo.map(function (h) {
+      return h.estado === 'Disponible'
+        ? '<a class="script-chip" href="' + construirUrlHerramientaConDatos_(h.url, cliente) + '" target="_blank">🔗 ' + escapar(h.nombre) + '</a>'
+        : '<span class="script-chip pendiente">⏳ ' + escapar(h.nombre) + '</span>';
+    }).join('') + '</div></div>';
 }
 
 // ================== PESTAÑA "CONSULTORÍA Y GESTIÓN DE ENTREGABLES" ==================
@@ -483,7 +1281,6 @@ function renderPreviewCliente(c) {
     '<div><dt>URL / Sitio web</dt><dd>' + (escapar(c.url) || '—') + '</dd></div>' +
     '<div><dt>Industria</dt><dd>' + (escapar(c.industria) || '—') + '</dd></div>' +
     '<div><dt>Tamaño</dt><dd>' + (escapar(c.tamano) || '—') + '</dd></div>' +
-    '<div><dt>Colaboradores</dt><dd>' + (c.colaboradores || '—') + '</dd></div>' +
     '<div><dt>Diagnosticados</dt><dd>' + diagnosticados + '</dd></div>' +
     '</dl>' +
     '<div style="margin-top:12px"><strong>Módulos contratados:</strong><div class="etiquetas">' + badgesModulos + '</div></div>' +
@@ -506,9 +1303,10 @@ function seleccionarCliente(clienteId) {
   Promise.all([
     llamarServidor('apiObtenerCliente', clienteId),
     llamarServidor('apiObtenerDiagnosticosCliente', clienteId),
-    llamarServidor('apiObtenerConsultoriasCliente', clienteId)
+    llamarServidor('apiObtenerConsultoriasCliente', clienteId),
+    llamarServidor('apiObtenerKickOffCliente', clienteId)
   ]).then(function (resultados) {
-    const cliente = resultados[0], diagnosticos = resultados[1], consultorias = resultados[2];
+    const cliente = resultados[0], diagnosticos = resultados[1], consultorias = resultados[2], kickOffExistente = resultados[3];
     if (!diagnosticos || diagnosticos.length === 0) {
       mostrarToast('Este cliente todavía no tiene ningún módulo diagnosticado. Complétalo en "Diagnóstico Comercial".', 'error');
       return;
@@ -526,6 +1324,11 @@ function seleccionarCliente(clienteId) {
     document.getElementById('selectorCliente').classList.add('hidden');
     document.getElementById('subwizardConsultoria').classList.remove('hidden');
     document.getElementById('nombreClienteActivo').textContent = cliente.nombre;
+    renderJourney('journeyConsultoria', estadoJourneyParaCliente_(true, !!kickOffExistente, consultorias));
+    document.getElementById('resumenKickOffConsultoria').innerHTML = renderResumenKickOff_(kickOffExistente);
+    if (!kickOffExistente) {
+      mostrarToast('Este cliente aún no tiene Kick Off registrado — la consultoría se puede generar igual, pero se personaliza mejor si lo completas primero en "Kick Off COE".', 'exito');
+    }
 
     // Si ya había consultorías generadas para este cliente, entra directo a
     // Revisión; si no, arranca en el paso de generación.
@@ -582,7 +1385,9 @@ function renderRevisionConsultoria() {
     return '<div class="bloque-revision"><h4>' + etiqueta + ' <span class="hint">(uno por línea)</span></h4><textarea data-campo="' + campo + '" data-tipo="lista">' + (j[campo] || []).join('\n') + '</textarea></div>';
   }
 
-  let html = bloqueTexto('diagnostico', 'Diagnóstico', true);
+  let html = renderScriptsRecomendados_(c.modulo, st.cliente);
+  html += renderSeguimientoHtml_(c);
+  html += bloqueTexto('diagnostico', 'Diagnóstico', true);
   html += bloqueLista('necesidades', 'Necesidades');
   html += bloqueLista('oportunidades', 'Oportunidades');
   html += bloqueTexto('consultoria_recomendada', 'Consultoría recomendada', true);
@@ -600,15 +1405,66 @@ function renderRevisionConsultoria() {
   }).join('') + '</div>';
 
   if (j.trazabilidad && j.trazabilidad.length) {
-    html += '<div class="bloque-revision"><h4>Trazabilidad de la IA</h4>' + j.trazabilidad.map(function (t) {
+    html += '<details class="bloque-revision trazabilidad-detalle"><summary>Trazabilidad de la IA</summary>' + j.trazabilidad.map(function (t) {
       return '<div class="fila-origen"><span class="origen-tag origen-' + t.origen + '">' + t.origen.replace('_',' ') + '</span>' + escapar(t.campo) + ' — ' + escapar(t.detalle || '') + '</div>';
-    }).join('') + '</div>';
+    }).join('') + '</details>';
   }
 
   cont.innerHTML = html;
 }
 
 function cambiarTabRevision(i) { st.moduloRevisionActivo = i; renderRevisionConsultoria(); }
+
+/**
+ * Checklist "Aplica / No aplica / Requiere ajuste" (sección 5 del rediseño):
+ * convierte necesidades + configuración recomendada + tareas en una lista
+ * única que el COE recorre junto con el cliente. El estado de cada punto se
+ * guarda en contenido_json.seguimiento_json ({ "campo:indice": estado }) sin
+ * tocar el resto del contenido — es un seguimiento de la sesión, no una
+ * edición del contenido generado por la IA.
+ */
+function renderSeguimientoHtml_(c) {
+  const j = c.contenido_json;
+  const seguimiento = c.seguimiento_json || {};
+
+  // Antes se listaban TODAS las necesidades + configuración recomendada + tareas (a veces
+  // 10 o más puntos), lo que hacía el checklist agotador de recorrer con el cliente. Ahora
+  // se muestran como máximo 3 puntos MUY estratégicos por módulo: el primero de cada
+  // categoría (necesidades, configuración recomendada, tareas) — que suele ser el más
+  // relevante, porque la IA ya los devuelve en orden de prioridad — y solo se completa con
+  // un punto adicional de la misma categoría si alguna de las otras quedó vacía.
+  const categorias = [
+    (j.necesidades || []).map(function (t, i) { return { key: 'necesidades:' + i, texto: t }; }),
+    (j.configuracion_recomendada || []).map(function (t, i) { return { key: 'configuracion_recomendada:' + i, texto: t }; }),
+    (j.tareas || []).map(function (t, i) { return { key: 'tareas:' + i, texto: t }; })
+  ];
+  let puntos = categorias.map(function (arr) { return arr[0]; }).filter(Boolean);
+  if (puntos.length < 3) {
+    categorias.forEach(function (arr) {
+      for (let i = 1; i < arr.length && puntos.length < 3; i++) puntos.push(arr[i]);
+    });
+  }
+  puntos = puntos.slice(0, 3);
+  if (!puntos.length) return '';
+
+  const opciones = [['aplica', '✓ Aplica'], ['ajustar', '✎ Ajustar'], ['no_aplica', '✕ No aplica']];
+  return '<div class="seguimiento-bloque"><h4>✅ Checklist con el cliente</h4><p class="hint" style="margin-top:0">Los 3 puntos más estratégicos de este módulo — recórrelos con el cliente y marca qué aplica, qué necesita ajuste y qué no aplica.</p>' +
+    puntos.map(function (p) {
+      const activo = seguimiento[p.key];
+      return '<div class="seguimiento-item"><span class="seguimiento-texto">' + escapar(p.texto) + '</span>' +
+        '<div class="seguimiento-controles">' + opciones.map(function (o) {
+          return '<button type="button" class="seguimiento-btn ' + o[0] + (activo === o[0] ? ' activo' : '') + '" onclick="marcarSeguimiento(\'' + p.key + '\',\'' + o[0] + '\')">' + o[1] + '</button>';
+        }).join('') + '</div></div>';
+    }).join('') + '</div>';
+}
+
+function marcarSeguimiento(key, valor) {
+  const c = st.consultorias[st.moduloRevisionActivo];
+  if (!c.seguimiento_json) c.seguimiento_json = {};
+  c.seguimiento_json[key] = (c.seguimiento_json[key] === valor) ? undefined : valor; // clic de nuevo = desmarcar
+  llamarServidor('apiGuardarSeguimientoConsultoria', c.id, c.seguimiento_json).catch(manejarErrorInesperado_);
+  renderRevisionConsultoria();
+}
 
 function guardarRevision() {
   const c = st.consultorias[st.moduloRevisionActivo];
@@ -665,6 +1521,51 @@ function generarEntregableFinal() {
       '<p><a href="' + entregable.url + '" target="_blank">' + entregable.url + '</a></p></div>';
     mostrarToast('Entregable generado con éxito.', 'exito');
   }).catch(manejarErrorInesperado_);
+}
+
+// ---------------- Playbook y Presentación Ejecutiva (Gema COE) ------------------
+// Paso 9: además del entregable PDF de la consultoría, el COE puede generar un
+// Playbook Técnico (y, si quiere, la Presentación Ejecutiva) con el contenido
+// que trae de su Gema de Gemini — ver GemaIntegracion.gs / apiGenerarPlaybookYNotificar
+// / apiGenerarEntregablesDuales en Code.gs.
+
+function leerDatosGemaCOE_() {
+  return {
+    entregablesTecnicos: document.getElementById('gema_entregables').value.trim(),
+    oportunidadesFuturas: document.getElementById('gema_oportunidades').value.trim(),
+    resumenPresentacion: document.getElementById('gema_resumen_ppt').value.trim()
+  };
+}
+
+function generarPlaybookCOE() {
+  if (!st.clienteId) { mostrarToast('Selecciona primero un cliente.', 'error'); return; }
+  const datosGema = leerDatosGemaCOE_();
+  const cont = document.getElementById('resultadoGemaCOE');
+  if (cont) cont.innerHTML = '<p class="hint">Generando el Playbook y enviándolo a tu correo…</p>';
+  llamarServidor('apiGenerarPlaybookYNotificar', st.clienteId, datosGema).then(function (res) {
+    if (cont) cont.innerHTML = '<div class="tarjeta-resumen"><h3>Playbook enviado</h3><p>' + escapar(res.mensaje) + '</p>' +
+      '<p><a href="' + res.pdfUrl + '" target="_blank">' + res.pdfUrl + '</a></p></div>';
+    mostrarToast('Playbook generado y enviado a tu correo.', 'exito');
+  }).catch(function (e) {
+    if (cont) cont.innerHTML = '';
+    manejarErrorInesperado_(e);
+  });
+}
+
+function descargarEntregablesDuales() {
+  if (!st.clienteId) { mostrarToast('Selecciona primero un cliente.', 'error'); return; }
+  const datosGema = leerDatosGemaCOE_();
+  const cont = document.getElementById('resultadoGemaCOE');
+  if (cont) cont.innerHTML = '<p class="hint">Generando el Playbook y la Presentación…</p>';
+  llamarServidor('apiGenerarEntregablesDuales', st.clienteId, datosGema).then(function (res) {
+    if (cont) cont.innerHTML = '<div class="tarjeta-resumen"><h3>Entregables generados</h3>' +
+      '<p>📄 Playbook Técnico: <a href="' + res.pdfUrl + '" target="_blank">ver</a> · <a href="' + res.pdfDownloadUrl + '" target="_blank">descargar</a></p>' +
+      '<p>📊 Presentación Ejecutiva: <a href="' + res.pptUrl + '" target="_blank">ver</a> · <a href="' + res.pptDownloadUrl + '" target="_blank">descargar</a></p></div>';
+    mostrarToast('Playbook y Presentación generados con éxito.', 'exito');
+  }).catch(function (e) {
+    if (cont) cont.innerHTML = '';
+    manejarErrorInesperado_(e);
+  });
 }
 
 // --------------------------------- Utilidades -----------------------------------
