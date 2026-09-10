@@ -21,18 +21,22 @@ const SHEETS = {
   PLANTILLAS: 'PLANTILLAS',
   PROPUESTAS_VALOR: 'PROPUESTAS_VALOR',
   OPORTUNIDADES: 'OPORTUNIDADES',
+  HERRAMIENTAS: 'HERRAMIENTAS', // catálogo de AppScripts del equipo — Biblioteca de Magia
   CLIENTES: 'CLIENTES',
   DIAGNOSTICOS: 'DIAGNOSTICOS',
+  KICKOFF: 'KICKOFF', // etapa intermedia Diagnóstico -> Kick Off COE -> Consultoría
   CONSULTORIAS: 'CONSULTORIAS',
   ENTREGABLES: 'ENTREGABLES'
 };
 
 // Hojas que forman la Base de Conocimiento (pueden vivir en un
 // spreadsheet separado del transaccional — ver getKnowledgeSpreadsheet()).
+// HERRAMIENTAS vive acá porque es un catálogo compartido entre clientes,
+// igual que MODULOS o PLANTILLAS — no es información transaccional de un cliente.
 const KNOWLEDGE_SHEETS = [
   SHEETS.MODULOS, SHEETS.PREGUNTAS, SHEETS.OPCIONES,
   SHEETS.CONOCIMIENTO, SHEETS.PLANTILLAS, SHEETS.PROPUESTAS_VALOR,
-  SHEETS.OPORTUNIDADES
+  SHEETS.OPORTUNIDADES, SHEETS.HERRAMIENTAS
 ];
 
 const ESTADOS_CONSULTORIA = {
@@ -128,6 +132,37 @@ function getApiKey_() {
 
 function getAiModel_() {
   return PropertiesService.getScriptProperties().getProperty('AI_MODEL') || CONFIG.AI_MODEL_DEFAULT;
+}
+
+/**
+ * ID de la plantilla maestra de Google Slides (Presentación Ejecutiva) usada
+ * por GemaIntegracion.gs. Sigue el mismo patrón que getApiKey_(): se configura
+ * como Script Property (PLANTILLA_PPT_ID) en vez de quedar escrita en el código,
+ * así el equipo COE puede cambiar la plantilla sin tocar ningún archivo .gs.
+ * Acepta tanto el link completo de Slides como el ID puro — ver extraerIdDeUrl_().
+ */
+function getPlantillaPptId_() {
+  const valor = PropertiesService.getScriptProperties().getProperty('PLANTILLA_PPT_ID');
+  if (!valor) {
+    throw new AppError(
+      'CONFIG_ERROR',
+      'No se encontró la plantilla de Presentación Ejecutiva. Configúrala en Extensiones > Apps Script > ' +
+      'Configuración del proyecto > Propiedades del script, con la clave PLANTILLA_PPT_ID (puedes pegar el ' +
+      'link completo de Google Slides o solo el ID — ver GUIA_INSTALACION.md).'
+    );
+  }
+  return extraerIdDeUrl_(valor);
+}
+
+/**
+ * Acepta tanto un ID de Drive/Docs/Slides puro como el link completo
+ * (https://docs.google.com/presentation/d/ESTE_ID/edit) y siempre devuelve
+ * solo el ID — así el equipo COE puede pegar el link tal cual lo copia del
+ * navegador, sin tener que extraer el ID a mano.
+ */
+function extraerIdDeUrl_(urlOId) {
+  const match = String(urlOId).match(/\/d\/([-\w]+)/);
+  return match ? match[1] : String(urlOId).trim();
 }
 
 function getUsuarioActual_() {
